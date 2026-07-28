@@ -248,6 +248,30 @@ function moveChoiceSelection(delta) {
   updateChoiceHighlight();
 }
 
+// The snippet box's height is fixed (CSS gives it whatever space is left
+// over after the topbar/choices/feedback/next-button, so it never resizes
+// per question -- see style.css). But exactly how much that leftover space
+// is can't be predicted in CSS alone, so instead of ever letting it scroll,
+// shrink the text (not the box) until it actually fits.
+const SNIPPET_MIN_FONT_PX = 12;
+
+function fitSnippetText() {
+  snippetEl.style.fontSize = "";
+  const maxHeight = snippetEl.clientHeight;
+  if (!maxHeight) return;
+  let fontSize = parseFloat(getComputedStyle(snippetEl).fontSize);
+  while (snippetEl.scrollHeight > maxHeight + 1 && fontSize > SNIPPET_MIN_FONT_PX) {
+    fontSize -= 1;
+    snippetEl.style.fontSize = `${fontSize}px`;
+  }
+}
+
+window.addEventListener("resize", () => {
+  if (!quizSection.classList.contains("hidden")) {
+    fitSnippetText();
+  }
+});
+
 function showQuestion() {
   const q = questions[questionIndex];
   feedbackEl.textContent = "";
@@ -258,6 +282,7 @@ function showQuestion() {
   selectedChoiceIndex = -1;
 
   snippetEl.textContent = q.snippet;
+  fitSnippetText();
   q.choices.forEach((choice) => {
     const btn = document.createElement("button");
     btn.textContent = choice;
