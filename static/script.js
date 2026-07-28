@@ -315,39 +315,29 @@ function showResults() {
   });
 }
 
-async function submitAnswer(question, choice, clickedBtn) {
+function submitAnswer(question, choice, clickedBtn) {
   Array.from(choicesEl.children).forEach((btn) => (btn.disabled = true));
-  // Acknowledge the tap immediately, before the correctness check comes back --
-  // without this the buttons just go gray and sit there for the round-trip,
-  // which reads as the tap not having registered.
-  clickedBtn.classList.add("pending");
 
-  const res = await fetch("/api/quiz/answer", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ quiz_id: question.quiz_id, choice }),
-  });
-  const data = await res.json();
-  clickedBtn.classList.remove("pending");
+  const correct = choice === question.answer;
 
   score.total += 1;
-  if (data.correct) {
+  if (correct) {
     score.correct += 1;
     clickedBtn.classList.add("correct");
     feedbackEl.textContent = "正解！";
   } else {
     clickedBtn.classList.add("incorrect");
-    feedbackEl.textContent = `不正解… 正解は「${data.answer}」`;
+    feedbackEl.textContent = `不正解… 正解は「${question.answer}」`;
     Array.from(choicesEl.children).forEach((btn) => {
-      if (btn.textContent === data.answer) btn.classList.add("correct");
+      if (btn.textContent === question.answer) btn.classList.add("correct");
     });
   }
 
   reviewLog.push({
     snippet: question.snippet,
     userAnswer: choice,
-    correctAnswer: data.answer,
-    correct: data.correct,
+    correctAnswer: question.answer,
+    correct,
   });
 
   scoreCorrectEl.textContent = score.correct;

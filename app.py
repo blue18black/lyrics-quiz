@@ -1,7 +1,5 @@
 import random
 import re
-import unicodedata
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, jsonify, render_template, request
@@ -18,9 +16,6 @@ app = Flask(__name__)
 # instead of "超ときめき♡宣伝部").
 yt = YTMusic()
 yt_ja = YTMusic(language="ja")
-
-# quiz_id -> {"answer": str}
-QUIZZES: dict[str, dict] = {}
 
 
 def clean_title(title: str) -> str:
@@ -590,12 +585,10 @@ def build_questions(
         choices = distractors + [song["title"]]
         random.shuffle(choices)
 
-        quiz_id = str(uuid.uuid4())
-        QUIZZES[quiz_id] = {"answer": song["title"]}
         questions.append({
-            "quiz_id": quiz_id,
             "snippet": snippet,
             "choices": choices,
+            "answer": song["title"],
         })
 
     return questions
@@ -693,23 +686,6 @@ def build_quiz():
     if not questions:
         return jsonify({"error": "no_quiz_available"}), 404
     return jsonify({"artist": artist, "questions": questions})
-
-
-@app.route("/api/quiz/answer", methods=["POST"])
-def answer_quiz():
-    data = request.get_json(force=True) or {}
-    quiz_id = data.get("quiz_id")
-    choice = data.get("choice")
-
-    quiz = QUIZZES.pop(quiz_id, None)
-    if not quiz:
-        return jsonify({"error": "quiz_not_found"}), 404
-
-    def normalize_for_compare(s: str) -> str:
-        return unicodedata.normalize("NFC", (s or "").strip())
-
-    correct = normalize_for_compare(choice) == normalize_for_compare(quiz["answer"])
-    return jsonify({"correct": correct, "answer": quiz["answer"]})
 
 
 if __name__ == "__main__":
