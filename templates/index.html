@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>歌詞クイズ</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="app">
+    <div id="setup-screen">
+      <h1>歌詞クイズ</h1>
+      <p class="subtitle">アーティスト名を入れて、歌詞の一部から曲名を当てよう</p>
+
+      <section class="setup">
+        <div class="input-wrap">
+          <input id="artist-input" type="text" placeholder="例: YOASOBI" autocomplete="off" />
+          <button id="artist-clear-btn" class="artist-clear-btn hidden" title="クリア" aria-label="入力をクリア">✕</button>
+          <span id="artist-confirmed-icon" class="artist-confirmed-icon hidden" aria-hidden="true">✓</span>
+          <ul id="suggestions" class="suggestions hidden"></ul>
+        </div>
+      </section>
+
+      <section class="count-select">
+        <button class="count-btn active" data-count="10">10問</button>
+        <button class="count-btn" data-count="20">20問</button>
+        <button class="count-btn" data-count="all">全問</button>
+      </section>
+
+      <section class="difficulty-select">
+        <button class="difficulty-btn active" data-difficulty="normal">通常(2〜4行)</button>
+        <button class="difficulty-btn" data-difficulty="hard">上級(1行)</button>
+      </section>
+
+      <section class="scope-select">
+        <button class="scope-btn" data-scope="all">全曲から出題</button>
+        <button class="scope-btn" data-scope="top50">Top 50</button>
+        <button class="scope-btn active" data-scope="top25">Top 25</button>
+      </section>
+
+      <button id="start-btn" class="start-btn">クイズ開始</button>
+    </div>
+
+    <div id="quiz-topbar" class="quiz-topbar-wrap hidden">
+      <div class="quiz-topbar-row">
+        <button id="quiz-home-btn" class="quiz-home-btn" title="ホームへ戻る" aria-label="ホームへ戻る"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8" /><path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10" /><path d="M9 21v-6h6v6" /></svg></button>
+        <section id="score" class="score">
+          <span id="score-artist" class="score-artist"></span>
+          <span class="score-stats">
+            <span><span id="score-correct">0</span> / <span id="score-total">0</span> 正解</span>
+            <span id="progress"></span>
+          </span>
+        </section>
+      </div>
+      <div class="progress-bar"><div id="progress-bar-fill" class="progress-bar-fill"></div></div>
+    </div>
+
+    <section id="quiz" class="quiz hidden">
+      <span class="snippet-label">この歌詞の曲は？</span>
+      <p class="snippet" id="snippet"></p>
+      <div id="choices" class="choices"></div>
+      <p id="feedback" class="feedback"></p>
+      <button id="next-btn" class="invisible">次の問題</button>
+    </section>
+
+    <section id="results" class="results hidden">
+      <h1>結果発表</h1>
+      <p class="results-score" id="results-score"></p>
+      <div class="results-actions">
+        <button id="play-again-btn" class="start-btn">もう一度遊ぶ</button>
+        <button id="home-btn" class="home-btn">ホームへ</button>
+      </div>
+      <div id="results-review" class="results-review"></div>
+    </section>
+
+    <div id="loading" class="loading hidden">
+      <span class="spinner" aria-hidden="true"></span>
+      <p class="loading-text" id="loading-text"></p>
+      <button id="cancel-load-btn" class="cancel-load-btn" type="button">中止</button>
+    </div>
+
+    <p id="status" class="status"></p>
+  </main>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
