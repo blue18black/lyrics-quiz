@@ -277,6 +277,8 @@ button {
   cursor: pointer;
   transition: background 0.15s ease, transform 0.1s ease;
   white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 button:hover {
@@ -727,4 +729,17 @@ button:disabled {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--correct);
+}
+
+/* Phones: the fixed snippet height was tuned against desktop's wider line-wrap
+   estimate, so on a narrow phone screen the same text wraps into more visual
+   rows than expected and either needs internal scrolling or gets clipped.
+   Let the snippet grow to fit its content instead, and let the page itself
+   scroll (natural on mobile) rather than a fiddly nested scroll box. */
+@media (max-width: 600px) {
+  .snippet {
+    height: auto;
+    min-height: 6rem;
+    overflow-y: visible;
+  }
 }
