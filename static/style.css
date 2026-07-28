@@ -759,7 +759,7 @@ button:disabled {
      leftover space for the snippet. */
   body.quiz-active {
     align-items: stretch;
-    padding: 0.5rem 1.25rem;
+    padding: 0.35rem 1.25rem;
   }
 
   body.quiz-active .app {
@@ -777,7 +777,7 @@ button:disabled {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 0.6rem;
+    padding: 0.5rem;
   }
 
   .snippet-label {
@@ -789,7 +789,7 @@ button:disabled {
     height: auto;
     min-height: 5.5rem;
     max-height: none;
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.35rem;
   }
 
   .choices,
@@ -799,24 +799,24 @@ button:disabled {
   }
 
   .choices {
-    gap: 0.35rem;
+    gap: 0.3rem;
   }
 
-  /* A bit smaller than before -- still comfortably tappable, but the snippet
-     was still scrolling on some phones, so this trades a little back. */
+  /* Smaller again -- still tappable, but the snippet was still scrolling on
+     some phones, so this trades a bit more of the card's chrome back to it. */
   .choices button {
-    padding: 0.6rem 0.9rem;
-    min-height: calc(0.6rem * 2 + 1.35em * 2);
+    padding: 0.45rem 0.85rem;
+    min-height: calc(0.45rem * 2 + 1.35em * 2);
   }
 
   .feedback {
-    min-height: 2.2rem;
-    margin-top: 0.35rem;
+    min-height: 2rem;
+    margin-top: 0.3rem;
   }
 
   #next-btn {
-    margin-top: 0.35rem;
-    padding-top: 0.55rem;
-    padding-bottom: 0.55rem;
+    margin-top: 0.3rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
   }
 }
