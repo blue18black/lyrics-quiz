@@ -93,12 +93,28 @@ scopeButtons.forEach((btn) => {
   });
 });
 
+function renderSuggestionStatus(text) {
+  suggestionsEl.innerHTML = "";
+  activeSuggestionIndex = -1;
+  const li = document.createElement("li");
+  li.textContent = text;
+  li.className = "suggestion-status";
+  suggestionsEl.appendChild(li);
+  suggestionsEl.classList.remove("hidden");
+}
+
+function hideSuggestions() {
+  suggestionsEl.innerHTML = "";
+  activeSuggestionIndex = -1;
+  suggestionsEl.classList.add("hidden");
+}
+
 function renderSuggestions(items) {
   suggestionsEl.innerHTML = "";
   activeSuggestionIndex = -1;
 
   if (!items || items.length === 0) {
-    suggestionsEl.classList.add("hidden");
+    renderSuggestionStatus("見つかりませんでした");
     return;
   }
 
@@ -120,7 +136,8 @@ function renderSuggestions(items) {
 
 function highlightSuggestion(delta) {
   const items = Array.from(suggestionsEl.children);
-  if (items.length === 0) return;
+  // Nothing selectable while showing a "検索中…" / "見つかりませんでした" placeholder.
+  if (items.length === 0 || items[0].classList.contains("suggestion-status")) return;
 
   items[activeSuggestionIndex]?.classList.remove("active");
   activeSuggestionIndex =
@@ -173,9 +190,14 @@ artistInput.addEventListener("input", () => {
     if (suggestAbortController) {
       suggestAbortController.abort();
     }
-    renderSuggestions([]);
+    hideSuggestions();
     return;
   }
+
+  // Show a status right away so it's clear something is happening during the
+  // debounce + network round-trip, instead of the dropdown just staying empty
+  // (which looked identical whether it was still searching or found nothing).
+  renderSuggestionStatus("検索中…");
 
   // A short debounce -- imperceptible to someone typing, but it keeps fast typing
   // from firing a full suggestion lookup (which resolves each candidate against
@@ -191,7 +213,7 @@ artistClearBtn.addEventListener("mousedown", (e) => {
   artistInput.value = "";
   artistClearBtn.classList.add("hidden");
   setArtistConfirmed(false);
-  renderSuggestions([]);
+  hideSuggestions();
   artistInput.focus();
 });
 
