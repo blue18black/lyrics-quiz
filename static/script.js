@@ -315,10 +315,16 @@ function showResults() {
   });
 }
 
+function decodeAnswer(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 function submitAnswer(question, choice, clickedBtn) {
   Array.from(choicesEl.children).forEach((btn) => (btn.disabled = true));
 
-  const correct = choice === question.answer;
+  const answer = decodeAnswer(question.a);
+  const correct = choice === answer;
 
   score.total += 1;
   if (correct) {
@@ -327,16 +333,16 @@ function submitAnswer(question, choice, clickedBtn) {
     feedbackEl.textContent = "正解！";
   } else {
     clickedBtn.classList.add("incorrect");
-    feedbackEl.textContent = `不正解… 正解は「${question.answer}」`;
+    feedbackEl.textContent = `不正解… 正解は「${answer}」`;
     Array.from(choicesEl.children).forEach((btn) => {
-      if (btn.textContent === question.answer) btn.classList.add("correct");
+      if (btn.textContent === answer) btn.classList.add("correct");
     });
   }
 
   reviewLog.push({
     snippet: question.snippet,
     userAnswer: choice,
-    correctAnswer: question.answer,
+    correctAnswer: answer,
     correct,
   });
 

@@ -1,3 +1,4 @@
+import base64
 import random
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -588,7 +589,10 @@ def build_questions(
         questions.append({
             "snippet": snippet,
             "choices": choices,
-            "answer": song["title"],
+            # base64'd, not plaintext -- the answer is still technically visible to
+            # anyone who inspects the network response, but this at least keeps it
+            # from being readable at a glance.
+            "a": base64.b64encode(song["title"].encode("utf-8")).decode("ascii"),
         })
 
     return questions
