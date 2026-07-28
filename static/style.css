@@ -534,7 +534,11 @@ button:disabled {
 
 .feedback {
   margin-top: clamp(0.4rem, 1vh, 0.75rem);
-  min-height: 1.3rem;
+  /* Reserve 2 lines always (a long incorrect-answer title can wrap) so this
+     doesn't fluctuate per question -- a question that happens to wrap to 2
+     lines was pushing the total page height past a short viewport and
+     forcing a scroll that a 1-line question didn't need. */
+  min-height: 2.6rem;
   line-height: 1.3;
   font-weight: 700;
   font-size: 0.95rem;
