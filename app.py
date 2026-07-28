@@ -550,16 +550,23 @@ _LYRICS_CACHE: dict[str, str | None] = {}
 def fetch_lyrics(video_id: str) -> str | None:
     # "Play again" reshuffles from the same (cached) song pool, so replaying
     # tends to re-hit songs whose lyrics were already fetched last time --
-    # cache both hits and misses (None) so a replay doesn't redo this network
-    # round-trip for every song, which was the slow part of a rebuild.
+    # cache both hits and confirmed misses so a replay doesn't redo this
+    # network round-trip for every song, which was the slow part of a
+    # rebuild. Only a confirmed "this song has no lyrics" is cached as a miss
+    # though -- a transient network/API error is NOT cached, since that would
+    # otherwise permanently blacklist a song that just had a momentary
+    # hiccup for the rest of the server's uptime.
     if video_id in _LYRICS_CACHE:
         return _LYRICS_CACHE[video_id]
     try:
         watch_playlist = yt.get_watch_playlist(video_id)
         lyrics_browse_id = watch_playlist.get("lyrics")
-        lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"] if lyrics_browse_id else None
+        if not lyrics_browse_id:
+            _LYRICS_CACHE[video_id] = None
+            return None
+        lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"]
     except Exception:
-        lyrics = None
+        return None
     _LYRICS_CACHE[video_id] = lyrics
     return lyrics
 
