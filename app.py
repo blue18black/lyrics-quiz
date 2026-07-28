@@ -710,42 +710,6 @@ def suggest():
     return jsonify(names)
 
 
-@app.route("/api/debug/pool")
-def debug_pool():
-    # TEMPORARY diagnostic route -- remove once the live-vs-local song-count
-    # discrepancy is understood. Not linked from the UI.
-    artist = (request.args.get("artist") or "").strip()
-    if not artist:
-        return jsonify({"error": "artist is required"}), 400
-
-    target = find_target_artist(artist)
-    if not target:
-        return jsonify({"error": "artist_not_found"}), 404
-    name, artist_id = target
-
-    raw_all = fetch_all_tracks(artist_id)
-    deduped_all = _dedupe_tracks(raw_all)
-    raw_popular = fetch_popular_tracks(artist_id)
-
-    lyrics_ok = 0
-    lyrics_fail = 0
-    for t in deduped_all[:25]:
-        if fetch_lyrics(t["videoId"]):
-            lyrics_ok += 1
-        else:
-            lyrics_fail += 1
-
-    return jsonify({
-        "resolved_name": name,
-        "artist_id": artist_id,
-        "fetch_all_tracks_raw": len(raw_all),
-        "fetch_all_tracks_deduped": len(deduped_all),
-        "fetch_popular_tracks_raw": len(raw_popular),
-        "lyrics_ok_of_first_25_deduped": lyrics_ok,
-        "lyrics_fail_of_first_25_deduped": lyrics_fail,
-    })
-
-
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
