@@ -440,13 +440,66 @@ button:disabled {
   border-left: 3px solid var(--accent);
   background: rgba(124, 108, 240, 0.08);
   border-radius: 0 10px 10px 0;
-  /* Fixed per screen size (not per-question) so the box never resizes between
-     questions and choice buttons never shift -- sized generously for the
-     longest lyric snippet rather than fit to each one individually. */
+  /* Fallback for the (JS-less) case body never gets the quiz-active class
+     below, which is what actually governs sizing during play. */
   height: clamp(9rem, 32vh, 11rem);
   display: flex;
   align-items: center;
   overflow-y: auto;
+}
+
+/* Game screen: lay the topbar + quiz card out as a column that exactly
+   fills the viewport, with the snippet as the one flexible piece that
+   absorbs whatever space is left over. Every other piece (topbar, choices,
+   feedback, next button) keeps its natural size, so the total can never
+   exceed the screen and nothing needs to scroll -- on any window size, not
+   just phones: a short desktop browser window can overflow just as easily
+   if every piece is sized independently instead of one absorbing the slack. */
+body.quiz-active {
+  align-items: stretch;
+}
+
+body.quiz-active .app {
+  display: flex;
+  flex-direction: column;
+}
+
+.quiz-topbar-wrap {
+  flex-shrink: 0;
+}
+
+body.quiz-active .quiz {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.snippet-label {
+  flex-shrink: 0;
+}
+
+body.quiz-active .snippet {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 5.5rem;
+  max-height: none;
+}
+
+.choices,
+.feedback,
+#next-btn {
+  flex-shrink: 0;
+}
+
+/* Reserve room for 2 wrapped lines always on choice buttons and feedback
+   text, so a question with short vs. long (2-line) text doesn't change
+   their height -- otherwise the snippet above, which absorbs whatever
+   height is left over, would end up a different size per question. */
+.choices button {
+  min-height: calc(clamp(0.3rem, 1.2vh, 0.6rem) * 2 + 1.35em * 2);
+  display: flex;
+  align-items: center;
 }
 
 .choices {
@@ -752,68 +805,33 @@ button:disabled {
      below is trimmed down from its desktop size to leave more of that
      leftover space for the snippet. */
   body.quiz-active {
-    align-items: stretch;
     padding: 0.35rem 1.25rem;
   }
 
-  body.quiz-active .app {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .quiz-topbar-wrap {
-    flex-shrink: 0;
-    margin-bottom: 0.3rem;
-  }
-
   body.quiz-active .quiz {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
     padding: 0.5rem;
   }
 
-  .snippet-label {
-    flex-shrink: 0;
-  }
-
   body.quiz-active .snippet {
-    flex: 1 1 auto;
-    height: auto;
-    min-height: 5.5rem;
-    max-height: none;
     margin-bottom: 0.35rem;
   }
 
-  .choices,
-  .feedback,
-  #next-btn {
-    flex-shrink: 0;
+  .quiz-topbar-wrap {
+    margin-bottom: 0.3rem;
   }
 
   .choices {
     gap: 0.3rem;
   }
 
-  /* Smaller again -- still tappable, but the snippet was still scrolling on
-     some phones, so this trades a bit more of the card's chrome back to it.
-     min-height reserves room for 2 wrapped lines always (a question with
-     short choices vs. one with long/2-line choices would otherwise produce
-     a different button height, and the snippet above -- which absorbs
-     whatever height is left over -- would end up a different size per
-     question). display:flex + align-items just centers 1-line text within
-     that reserved height. Desktop doesn't need any of this: its snippet has
-     its own independent fixed height, not one computed from leftover space. */
+  /* Smaller than desktop -- still tappable, but leaves more of the card's
+     chrome for the snippet on a short phone screen. */
   .choices button {
     padding: 0.45rem 0.85rem;
     min-height: calc(0.45rem * 2 + 1.35em * 2);
-    display: flex;
-    align-items: center;
   }
 
   .feedback {
-    /* Same reasoning as the choice buttons' min-height above. */
     min-height: 2rem;
     margin-top: 0.3rem;
   }
