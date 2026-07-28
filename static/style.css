@@ -754,9 +754,12 @@ button:disabled {
      exactly fills the viewport, with the snippet as the one flexible piece
      that absorbs whatever space is left over. Every other piece (topbar,
      choices, feedback, next button) keeps its natural size, so the total
-     can never exceed the screen and nothing needs to scroll. */
+     can never exceed the screen and nothing needs to scroll. Everything
+     below is trimmed down from its desktop size to leave more of that
+     leftover space for the snippet. */
   body.quiz-active {
     align-items: stretch;
+    padding: 0.5rem 1.25rem;
   }
 
   body.quiz-active .app {
@@ -766,6 +769,7 @@ button:disabled {
 
   .quiz-topbar-wrap {
     flex-shrink: 0;
+    margin-bottom: 0.3rem;
   }
 
   body.quiz-active .quiz {
@@ -773,6 +777,7 @@ button:disabled {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    padding: 0.6rem;
   }
 
   .snippet-label {
@@ -784,6 +789,7 @@ button:disabled {
     height: auto;
     min-height: 5.5rem;
     max-height: none;
+    margin-bottom: 0.4rem;
   }
 
   .choices,
@@ -792,9 +798,25 @@ button:disabled {
     flex-shrink: 0;
   }
 
-  /* Bigger tap targets -- the snippet now absorbs any leftover/shortfall
-     space, so choice buttons no longer need to shrink on short screens. */
+  .choices {
+    gap: 0.35rem;
+  }
+
+  /* A bit smaller than before -- still comfortably tappable, but the snippet
+     was still scrolling on some phones, so this trades a little back. */
   .choices button {
-    padding: 0.85rem 1rem;
+    padding: 0.6rem 0.9rem;
+    min-height: calc(0.6rem * 2 + 1.35em * 2);
+  }
+
+  .feedback {
+    min-height: 2.2rem;
+    margin-top: 0.35rem;
+  }
+
+  #next-btn {
+    margin-top: 0.35rem;
+    padding-top: 0.55rem;
+    padding-bottom: 0.55rem;
   }
 }
