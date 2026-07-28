@@ -322,22 +322,26 @@ async function submitAnswer(question, choice, clickedBtn) {
   // which reads as the tap not having registered.
   clickedBtn.classList.add("pending");
 
+  // TEMP diagnostic: measure the actual round-trip time so we can tell network
+  // latency apart from a rendering issue. Remove once the mobile lag is diagnosed.
+  const t0 = performance.now();
   const res = await fetch("/api/quiz/answer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ quiz_id: question.quiz_id, choice }),
   });
   const data = await res.json();
+  const elapsedMs = Math.round(performance.now() - t0);
   clickedBtn.classList.remove("pending");
 
   score.total += 1;
   if (data.correct) {
     score.correct += 1;
     clickedBtn.classList.add("correct");
-    feedbackEl.textContent = "正解！";
+    feedbackEl.textContent = `正解！ (${elapsedMs}ms)`;
   } else {
     clickedBtn.classList.add("incorrect");
-    feedbackEl.textContent = `不正解… 正解は「${data.answer}」`;
+    feedbackEl.textContent = `不正解… 正解は「${data.answer}」 (${elapsedMs}ms)`;
     Array.from(choicesEl.children).forEach((btn) => {
       if (btn.textContent === data.answer) btn.classList.add("correct");
     });
