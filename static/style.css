@@ -449,6 +449,15 @@ button:disabled {
   overflow-y: auto;
 }
 
+@media (max-width: 600px) {
+  /* Phones have much more spare vertical room below the setup controls than
+     desktop's 480px-wide card layout assumes, leaving dead space below the
+     card -- let the snippet claim more of it instead. */
+  .snippet {
+    height: clamp(10rem, 42vh, 16rem);
+  }
+}
+
 .choices {
   display: grid;
   gap: clamp(0.3rem, 1vh, 0.5rem);
@@ -466,7 +475,10 @@ button:disabled {
   word-break: break-word;
   line-height: 1.35;
   box-shadow: 0 2px 0 var(--card-border);
-  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+  /* box-shadow is deliberately not transitioned -- animating it forces a
+     repaint every frame, which is noticeably heavier on mobile GPUs than the
+     transform/background/border-color transitions below. */
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .choices button:hover:not(:disabled) {
