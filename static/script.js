@@ -317,6 +317,10 @@ function showResults() {
 
 async function submitAnswer(question, choice, clickedBtn) {
   Array.from(choicesEl.children).forEach((btn) => (btn.disabled = true));
+  // Acknowledge the tap immediately, before the correctness check comes back --
+  // without this the buttons just go gray and sit there for the round-trip,
+  // which reads as the tap not having registered.
+  clickedBtn.classList.add("pending");
 
   const res = await fetch("/api/quiz/answer", {
     method: "POST",
@@ -324,6 +328,7 @@ async function submitAnswer(question, choice, clickedBtn) {
     body: JSON.stringify({ quiz_id: question.quiz_id, choice }),
   });
   const data = await res.json();
+  clickedBtn.classList.remove("pending");
 
   score.total += 1;
   if (data.correct) {
