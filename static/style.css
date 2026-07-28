@@ -449,15 +449,6 @@ button:disabled {
   overflow-y: auto;
 }
 
-@media (max-width: 600px) {
-  /* Phones have much more spare vertical room below the setup controls than
-     desktop's 480px-wide card layout assumes, leaving dead space below the
-     card -- let the snippet claim more of it instead. */
-  .snippet {
-    height: clamp(10rem, 42vh, 16rem);
-  }
-}
-
 .choices {
   display: grid;
   gap: clamp(0.3rem, 1vh, 0.5rem);
@@ -746,4 +737,54 @@ button:disabled {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--correct);
+}
+
+@media (max-width: 600px) {
+  /* Game screen on phones: lay the topbar + quiz card out as a column that
+     exactly fills the viewport, with the snippet as the one flexible piece
+     that absorbs whatever space is left over. Every other piece (topbar,
+     choices, feedback, next button) keeps its natural size, so the total
+     can never exceed the screen and nothing needs to scroll. */
+  body.quiz-active {
+    align-items: stretch;
+  }
+
+  body.quiz-active .app {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .quiz-topbar-wrap {
+    flex-shrink: 0;
+  }
+
+  body.quiz-active .quiz {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .snippet-label {
+    flex-shrink: 0;
+  }
+
+  body.quiz-active .snippet {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 5.5rem;
+    max-height: none;
+  }
+
+  .choices,
+  .feedback,
+  #next-btn {
+    flex-shrink: 0;
+  }
+
+  /* Bigger tap targets -- the snippet now absorbs any leftover/shortfall
+     space, so choice buttons no longer need to shrink on short screens. */
+  .choices button {
+    padding: 0.85rem 1rem;
+  }
 }

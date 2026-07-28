@@ -269,6 +269,7 @@ function showQuestion() {
 }
 
 function showResults() {
+  document.body.classList.remove("quiz-active");
   quizSection.classList.add("hidden");
   scoreSection.classList.add("hidden");
   resultsScreen.classList.remove("hidden");
@@ -368,6 +369,7 @@ let currentLoadController = null;
 
 async function startQuiz(artist, count, difficulty, scope) {
   suggestionsEl.classList.add("hidden");
+  document.body.classList.remove("quiz-active");
   quizSection.classList.add("hidden");
   scoreSection.classList.add("hidden");
   resultsScreen.classList.add("hidden");
@@ -411,6 +413,7 @@ async function startQuiz(artist, count, difficulty, scope) {
     setupScreen.classList.add("hidden");
     scoreSection.classList.remove("hidden");
     quizSection.classList.remove("hidden");
+    document.body.classList.add("quiz-active");
     showQuestion();
   } catch (err) {
     setupScreen.classList.remove("hidden");
@@ -479,6 +482,7 @@ homeBtn.addEventListener("click", () => {
 });
 
 quizHomeBtn.addEventListener("click", () => {
+  document.body.classList.remove("quiz-active");
   quizSection.classList.add("hidden");
   scoreSection.classList.add("hidden");
   setupScreen.classList.remove("hidden");
