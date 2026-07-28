@@ -629,6 +629,21 @@ def resolve_suggestion_name(raw: str) -> str | None:
     return resolved
 
 
+def _direct_artist_matches(query: str) -> list[str]:
+    # get_search_suggestions' own autocomplete phrases sometimes miss an artist
+    # entirely for a short/generic query (e.g. "超" for "超ときめき♡宣伝部" -- none
+    # of YT Music's suggested completions resolve to it), even though a direct
+    # artist-name search for that same raw text does surface it. Searching the
+    # raw query directly (not just resolving autocomplete phrases) catches these.
+    try:
+        # ytmusicapi's `limit` only controls how many result pages it fetches, not
+        # how many it returns -- a single page is already ~20 items, so slice.
+        results = yt_ja.search(query, filter="artists", limit=5)[:5]
+    except Exception:
+        results = []
+    return [r["artist"] for r in results if r.get("artist")]
+
+
 @app.route("/api/suggest")
 def suggest():
     query = (request.args.get("q") or "").strip()
@@ -653,15 +668,15 @@ def suggest():
         candidates.append(text)
     candidates = candidates[:6]
 
-    if candidates:
-        with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
-            resolved = list(pool.map(resolve_suggestion_name, candidates))
-    else:
-        resolved = []
+    with ThreadPoolExecutor(max_workers=len(candidates) + 1) as pool:
+        resolve_futures = [pool.submit(resolve_suggestion_name, c) for c in candidates]
+        direct_future = pool.submit(_direct_artist_matches, query)
+        resolved = [f.result() for f in resolve_futures]
+        direct_matches = direct_future.result()
 
     seen_resolved = set()
     names = []
-    for name in resolved:
+    for name in resolved + direct_matches:
         if not name or name in seen_resolved:
             continue
         seen_resolved.add(name)
