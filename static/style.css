@@ -63,6 +63,7 @@ html, body {
 
 html {
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -77,6 +78,7 @@ body {
   padding: clamp(0.6rem, 3vh, 1.5rem) 1.25rem;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .app {
