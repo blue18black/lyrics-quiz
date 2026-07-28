@@ -544,6 +544,26 @@ def extract_snippet(
     return None
 
 
+_LYRICS_CACHE: dict[str, str | None] = {}
+
+
+def fetch_lyrics(video_id: str) -> str | None:
+    # "Play again" reshuffles from the same (cached) song pool, so replaying
+    # tends to re-hit songs whose lyrics were already fetched last time --
+    # cache both hits and misses (None) so a replay doesn't redo this network
+    # round-trip for every song, which was the slow part of a rebuild.
+    if video_id in _LYRICS_CACHE:
+        return _LYRICS_CACHE[video_id]
+    try:
+        watch_playlist = yt.get_watch_playlist(video_id)
+        lyrics_browse_id = watch_playlist.get("lyrics")
+        lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"] if lyrics_browse_id else None
+    except Exception:
+        lyrics = None
+    _LYRICS_CACHE[video_id] = lyrics
+    return lyrics
+
+
 def build_questions(
     artist: str,
     count: int | None,
@@ -566,13 +586,8 @@ def build_questions(
     for song in songs:
         if count is not None and len(questions) >= count:
             break
-        try:
-            watch_playlist = yt.get_watch_playlist(song["videoId"])
-            lyrics_browse_id = watch_playlist.get("lyrics")
-            if not lyrics_browse_id:
-                continue
-            lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"]
-        except Exception:
+        lyrics = fetch_lyrics(song["videoId"])
+        if not lyrics:
             continue
 
         snippet = extract_snippet(lyrics, song["title"], min_lines=min_lines, max_lines=max_lines)
