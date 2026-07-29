@@ -1,6 +1,7 @@
 import base64
 import random
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, jsonify, render_template, request
@@ -585,17 +586,24 @@ def fetch_lyrics(video_id: str) -> str | None:
     # hiccup for the rest of the server's uptime.
     if video_id in _LYRICS_CACHE:
         return _LYRICS_CACHE[video_id]
-    try:
-        watch_playlist = yt.get_watch_playlist(video_id)
-        lyrics_browse_id = watch_playlist.get("lyrics")
-        if not lyrics_browse_id:
-            _LYRICS_CACHE[video_id] = None
-            return None
-        lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"]
-    except Exception:
-        return None
-    _LYRICS_CACHE[video_id] = lyrics
-    return lyrics
+
+    # A burst of concurrent requests to YT Music's (unofficial) API appears to
+    # get some fraction of them transiently rejected -- retrying once after a
+    # short pause recovers a lot of those.
+    for attempt in range(2):
+        try:
+            watch_playlist = yt.get_watch_playlist(video_id)
+            lyrics_browse_id = watch_playlist.get("lyrics")
+            if not lyrics_browse_id:
+                _LYRICS_CACHE[video_id] = None
+                return None
+            lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"]
+            _LYRICS_CACHE[video_id] = lyrics
+            return lyrics
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.6)
+    return None
 
 
 def build_questions(
@@ -628,8 +636,10 @@ def build_questions(
     # Lyrics fetching is the slow part (2 network calls per song), and doing it
     # one song at a time was slow enough that a large catalog (scope="all" can
     # mean 100+ candidate songs) hit the request timeout before finishing.
-    # Fetch concurrently instead -- these are independent lookups.
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # Fetch concurrently instead -- these are independent lookups. Kept modest
+    # (not higher) because a larger burst of simultaneous requests seemed to
+    # get a bigger fraction of them transiently rejected by YT Music.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         found = [r for r in pool.map(build_one, songs) if r]
 
     questions = []
@@ -764,7 +774,7 @@ def debug_counts():
     def has_lyrics(t):
         return bool(fetch_lyrics(t["videoId"]))
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(has_lyrics, deduped))
     lyrics_ok = sum(results)
 
