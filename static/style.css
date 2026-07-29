@@ -172,6 +172,14 @@ h1 {
   box-shadow: none;
 }
 
+.setup-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
 input[type="text"] {
   appearance: none;
   -webkit-appearance: none;
