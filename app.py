@@ -389,11 +389,13 @@ def fetch_all_tracks(artist_id: str) -> list[dict]:
 
 
 _ARTIST_POPULAR_CACHE: dict[str, list[dict]] = {}
-_POPULAR_TRACK_LIMIT = 50
+# Fetch well past 50 so Top25/Top50 scope has ranks beyond their nominal cutoff
+# to backfill from (see build_questions) when some of the top tier lack lyrics.
+_POPULAR_TRACK_LIMIT = 100
 
 
 def fetch_popular_tracks(artist_id: str) -> list[dict]:
-    """Fetch (up to) the artist's top 50 most popular tracks, using YT Music's own
+    """Fetch (up to) the artist's top 100 most popular tracks, using YT Music's own
     "Top Songs" ranking playlist, for a "well-known songs only" difficulty tier --
     as opposed to fetch_all_tracks's full discography walk."""
     if artist_id in _ARTIST_POPULAR_CACHE:
@@ -645,11 +647,15 @@ def build_questions(
     # registered on YT Music, disproportionately older/deep-catalog tracks.)
     nominal = _SCOPE_NOMINAL_SIZE.get(scope)
     if nominal:
-        # Ranked scopes: fetch_songs returns these in popularity-rank order.
-        # Try the nominal top N first (that's what "top 25/50" should mean);
-        # only reach past rank N if too few of them have lyrics available to
-        # satisfy the requested question count, rather than just falling
-        # short of `count`.
+        # "全問" (count=None) within a ranked scope means "the full top N" --
+        # i.e. Top25 + all questions should aim for exactly 25, not whatever
+        # the top 25 alone happens to yield.
+        if count is None:
+            count = nominal
+        # fetch_songs returns these in popularity-rank order. Try the nominal
+        # top N first (that's what "top 25/50" should mean); only reach past
+        # rank N if too few of them have lyrics available to satisfy the
+        # requested question count, rather than just falling short of it.
         primary, backfill = songs[:nominal], songs[nominal:]
     else:
         primary, backfill = songs, []
