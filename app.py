@@ -760,6 +760,17 @@ def debug_albums():
             "has_lyrics": bool(fetch_lyrics(t["videoId"])),
         })
 
+    # Mirror fetch_songs(name, "top25") exactly (slice to 25 BEFORE dedup, same
+    # order as fetch_songs), so this matches what /api/quiz/build actually iterates.
+    deduped_top25 = _dedupe_tracks(popular[:25])
+    deduped_summary = []
+    for t in deduped_top25:
+        deduped_summary.append({
+            "title": t["title"],
+            "videoId": t["videoId"],
+            "has_lyrics": bool(fetch_lyrics(t["videoId"])),
+        })
+
     return jsonify({
         "resolved_name": name,
         "album_count": len(album_entries),
@@ -767,6 +778,8 @@ def debug_albums():
         "albums": summarize(album_entries, "album"),
         "singles": summarize(single_entries, "single"),
         "popular_tracks_first25": popular_summary,
+        "deduped_top25_pool_size": len(deduped_top25),
+        "deduped_top25": deduped_summary,
     })
 
 
