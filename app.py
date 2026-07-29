@@ -128,6 +128,10 @@ def _pick_winner(unique: list[dict]) -> dict:
 
 
 _DOMINANT_SONG_VOTES = 8
+# An exact-name match with fewer votes than this is treated as "song search
+# just doesn't have a reliable signal for this query" rather than "a real
+# contest" -- see the song_dominates_exact comment in find_target_artist.
+_EXACT_MATCH_CONTEST_FLOOR = 2
 
 
 def _is_pure_katakana(s: str) -> bool:
@@ -223,10 +227,19 @@ def find_target_artist(artist: str) -> tuple[str, str] | None:
     is_dominant = song_vote_count >= _DOMINANT_SONG_VOTES and song_vote_count >= runner_up_count * 1.5
 
     if exact_match_id:
+        # Only let the song-vote signal override an exact artist-name match when
+        # the exact match ALSO has a meaningful vote count of its own (a genuine
+        # contest between two charting artists, like aiko 17 vs. Jhené Aiko 19).
+        # Generic-word queries (e.g. "Mr.Children") can leave the correct exact
+        # match at 0-1 votes simply because song search doesn't reliably surface
+        # its own songs for that query -- in that case *any* small, noisy vote
+        # count elsewhere would otherwise "beat" it by the 2x rule below, since
+        # doubling ~0 is still ~0.
         song_dominates_exact = (
             song_vote_id
             and song_vote_id != exact_match_id
             and song_vote_count >= _DOMINANT_SONG_VOTES
+            and exact_match_votes >= _EXACT_MATCH_CONTEST_FLOOR
             and song_vote_count >= exact_match_votes * 2
         )
         artist_id = song_vote_id if song_dominates_exact else exact_match_id
