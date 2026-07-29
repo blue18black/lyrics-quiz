@@ -746,6 +746,37 @@ def suggest():
     return jsonify(names)
 
 
+@app.route("/api/debug/counts")
+def debug_counts():
+    # TEMPORARY diagnostic route -- checking where the scope="all" pipeline loses
+    # songs between raw discovery, dedup, and lyrics fetch. Not linked from the UI.
+    artist = (request.args.get("artist") or "").strip()
+    if not artist:
+        return jsonify({"error": "artist is required"}), 400
+    target = find_target_artist(artist)
+    if not target:
+        return jsonify({"error": "artist_not_found"}), 404
+    name, artist_id = target
+
+    raw = fetch_all_tracks(artist_id)
+    deduped = _dedupe_tracks(raw)
+
+    def has_lyrics(t):
+        return bool(fetch_lyrics(t["videoId"]))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(has_lyrics, deduped))
+    lyrics_ok = sum(results)
+
+    return jsonify({
+        "resolved_name": name,
+        "raw_track_count": len(raw),
+        "deduped_count": len(deduped),
+        "lyrics_ok_count": lyrics_ok,
+        "lyrics_fail_count": len(deduped) - lyrics_ok,
+    })
+
+
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
