@@ -342,18 +342,31 @@ def fetch_all_tracks(artist_id: str) -> list[dict]:
         key=lambda e: (entry_year(e), e["_type_rank"]),
     )
 
-    tracks = []
     seen_album_ids = set()
+    album_ids = []
     for entry in all_entries:
         album_id = entry.get("browseId")
         if not album_id or album_id in seen_album_ids:
             continue
         seen_album_ids.add(album_id)
-        try:
-            album = yt.get_album(album_id)
-        except Exception:
-            continue
+        album_ids.append(album_id)
 
+    def fetch_album(album_id):
+        try:
+            return yt.get_album(album_id)
+        except Exception:
+            return None
+
+    # A prolific artist can have 50-100+ albums/singles -- fetching them one at a
+    # time was the slow part of walking a full discography. These are independent
+    # lookups, so fetch them concurrently instead.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        albums = pool.map(fetch_album, album_ids)
+
+    tracks = []
+    for album_id, album in zip(album_ids, albums):
+        if not album:
+            continue
         year = int(album["year"]) if album.get("year") else None
         album_type = (album.get("type") or "").lower()
         album_name = album.get("title")
@@ -603,17 +616,26 @@ def build_questions(
     random.shuffle(songs)
     all_titles = [s["title"] for s in songs]
 
-    questions = []
-    for song in songs:
-        if count is not None and len(questions) >= count:
-            break
+    def build_one(song):
         lyrics = fetch_lyrics(song["videoId"])
         if not lyrics:
-            continue
-
+            return None
         snippet = extract_snippet(lyrics, song["title"], min_lines=min_lines, max_lines=max_lines)
         if not snippet:
-            continue
+            return None
+        return song, snippet
+
+    # Lyrics fetching is the slow part (2 network calls per song), and doing it
+    # one song at a time was slow enough that a large catalog (scope="all" can
+    # mean 100+ candidate songs) hit the request timeout before finishing.
+    # Fetch concurrently instead -- these are independent lookups.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        found = [r for r in pool.map(build_one, songs) if r]
+
+    questions = []
+    for song, snippet in found:
+        if count is not None and len(questions) >= count:
+            break
 
         distractor_pool = [t for t in all_titles if t != song["title"]]
         if len(distractor_pool) < 3:
