@@ -388,53 +388,33 @@ def fetch_all_tracks(artist_id: str) -> list[dict]:
     return tracks
 
 
-_ARTIST_POPULAR_CACHE: dict[str, list[dict]] = {}
-# Fetch well past 50 so Top25/Top50 scope has ranks beyond their nominal cutoff
-# to backfill from (see build_questions) when some of the top tier lack lyrics.
-_POPULAR_TRACK_LIMIT = 100
+def _fetch_view_count(video_id: str) -> int:
+    try:
+        details = yt.get_song(video_id).get("videoDetails") or {}
+        return int(details.get("viewCount") or 0)
+    except Exception:
+        return 0
 
 
-def fetch_popular_tracks(artist_id: str) -> list[dict]:
-    """Fetch (up to) the artist's top 100 most popular tracks, using YT Music's own
-    "Top Songs" ranking playlist, for a "well-known songs only" difficulty tier --
-    as opposed to fetch_all_tracks's full discography walk."""
-    if artist_id in _ARTIST_POPULAR_CACHE:
-        return _ARTIST_POPULAR_CACHE[artist_id]
+_ARTIST_RANKED_CACHE: dict[str, list[dict]] = {}
 
-    artist_page = yt.get_artist(artist_id)
-    songs_section = artist_page.get("songs") or {}
 
-    raw_tracks = []
-    playlist_id = songs_section.get("browseId")
-    if playlist_id:
-        try:
-            playlist = yt.get_playlist(playlist_id, limit=_POPULAR_TRACK_LIMIT)
-            raw_tracks = playlist.get("tracks", [])
-        except Exception:
-            raw_tracks = []
-    if not raw_tracks:
-        raw_tracks = songs_section.get("results", [])
+def fetch_ranked_tracks(artist_id: str) -> list[dict]:
+    """Rank the full discography by view count ourselves, for Top25/Top50 scope.
+    YT Music's own "Top Songs" playlist was tried first, but for at least some
+    artists it's a small, seemingly fixed-size shelf (~30 tracks) regardless of
+    how large their actual catalog is -- not a real reflection of "most popular
+    songs" once an artist has more than that many releases."""
+    if artist_id in _ARTIST_RANKED_CACHE:
+        return _ARTIST_RANKED_CACHE[artist_id]
 
-    tracks = []
-    for t in raw_tracks[:_POPULAR_TRACK_LIMIT]:
-        title, video_id = t.get("title"), t.get("videoId")
-        if not title or not video_id:
-            continue
-        album = t.get("album") or {}
-        tracks.append({
-            "title": title,
-            "videoId": video_id,
-            "albumId": album.get("id"),
-            "albumName": album.get("name"),
-            # The Top Songs playlist doesn't expose release year/type, so duplicate
-            # versions fall back to _pick_winner's title-based (variant-qualifier)
-            # tie-break only.
-            "_year": None,
-            "_type": "",
-        })
+    tracks = fetch_all_tracks(artist_id)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        view_counts = list(pool.map(_fetch_view_count, [t["videoId"] for t in tracks]))
 
-    _ARTIST_POPULAR_CACHE[artist_id] = tracks
-    return tracks
+    ranked = [t for t, _ in sorted(zip(tracks, view_counts), key=lambda pair: pair[1], reverse=True)]
+    _ARTIST_RANKED_CACHE[artist_id] = ranked
+    return ranked
 
 
 _ARTIST_VIDEO_CACHE: dict[str, list[dict]] = {}
@@ -512,16 +492,16 @@ def _dedupe_tracks(tracks: list[dict]) -> list[dict]:
 
 def fetch_songs(artist: str, scope: str = "all") -> list[dict]:
     """scope="top50"/"top25" limits the pool to the artist's most popular tracks
-    (by YT Music's own ranking) instead of the full discography. The result stays
-    in rank order (most popular first) -- build_questions relies on that to prefer
-    the nominal top 25/50 and only reach further down the ranking as a fallback."""
+    (by view count, see fetch_ranked_tracks) instead of the full discography. The
+    result stays in rank order (most popular first) -- build_questions relies on
+    that to prefer the nominal top 25/50 and only reach further down as a fallback."""
     target = find_target_artist(artist)
     if not target:
         return []
     _, artist_id = target
 
     if scope in ("top25", "top50"):
-        tracks = fetch_popular_tracks(artist_id)
+        tracks = fetch_ranked_tracks(artist_id)
     else:
         tracks = fetch_all_tracks(artist_id)
 
