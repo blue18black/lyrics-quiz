@@ -510,15 +510,15 @@ def _dedupe_tracks(tracks: list[dict]) -> list[dict]:
 
 def fetch_songs(artist: str, scope: str = "all") -> list[dict]:
     """scope="top50"/"top25" limits the pool to the artist's most popular tracks
-    (by YT Music's own ranking) instead of the full discography."""
+    (by YT Music's own ranking) instead of the full discography. The result stays
+    in rank order (most popular first) -- build_questions relies on that to prefer
+    the nominal top 25/50 and only reach further down the ranking as a fallback."""
     target = find_target_artist(artist)
     if not target:
         return []
     _, artist_id = target
 
-    if scope == "top25":
-        tracks = fetch_popular_tracks(artist_id)[:25]
-    elif scope == "top50":
+    if scope in ("top25", "top50"):
         tracks = fetch_popular_tracks(artist_id)
     else:
         tracks = fetch_all_tracks(artist_id)
@@ -606,6 +606,9 @@ def fetch_lyrics(video_id: str) -> str | None:
     return None
 
 
+_SCOPE_NOMINAL_SIZE = {"top25": 25, "top50": 50}
+
+
 def build_questions(
     artist: str,
     count: int | None,
@@ -621,7 +624,6 @@ def build_questions(
     if len(songs) < 4:
         return []
 
-    random.shuffle(songs)
     all_titles = [s["title"] for s in songs]
 
     def build_one(song):
@@ -641,8 +643,25 @@ def build_questions(
     # either way, just slower -- so concurrency only costs latency here, not
     # reliability. Most "failures" are songs that genuinely have no lyrics
     # registered on YT Music, disproportionately older/deep-catalog tracks.)
+    nominal = _SCOPE_NOMINAL_SIZE.get(scope)
+    if nominal:
+        # Ranked scopes: fetch_songs returns these in popularity-rank order.
+        # Try the nominal top N first (that's what "top 25/50" should mean);
+        # only reach past rank N if too few of them have lyrics available to
+        # satisfy the requested question count, rather than just falling
+        # short of `count`.
+        primary, backfill = songs[:nominal], songs[nominal:]
+    else:
+        primary, backfill = songs, []
+
     with ThreadPoolExecutor(max_workers=8) as pool:
-        found = [r for r in pool.map(build_one, songs) if r]
+        found = [r for r in pool.map(build_one, primary) if r]
+
+    if count is not None and len(found) < count and backfill:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            found += [r for r in pool.map(build_one, backfill) if r]
+
+    random.shuffle(found)  # presentation order, independent of rank
 
     questions = []
     for song, snippet in found:
