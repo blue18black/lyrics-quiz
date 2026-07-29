@@ -44,8 +44,8 @@ def clean_title(title: str) -> str:
 # than simple regex heuristics.
 
 INSTRUMENTAL_KEYWORDS = [
-    "instrumental", "off vocal", "offvocal", "backing track",
-    "インスト", "オフボーカル", "カラオケ",
+    "instrumental", "off vocal", "offvocal", "backing track", "less vocal",
+    "インスト", "オフボーカル", "カラオケ", "レスボーカル",
 ]
 
 
