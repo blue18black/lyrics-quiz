@@ -756,6 +756,56 @@ def suggest():
     return jsonify(names)
 
 
+@app.route("/api/debug/concurrency")
+def debug_concurrency():
+    # TEMPORARY diagnostic route -- compares lyrics-fetch success rate on the
+    # exact same subset of songs at different concurrency levels, to isolate
+    # whether concurrency itself (rate limiting) affects the success rate, as
+    # opposed to that subset's songs simply lacking lyrics data. Not linked
+    # from the UI.
+    artist = (request.args.get("artist") or "").strip()
+    workers = int(request.args.get("workers", "4"))
+    subset_size = int(request.args.get("limit", "40"))
+    if not artist:
+        return jsonify({"error": "artist is required"}), 400
+    target = find_target_artist(artist)
+    if not target:
+        return jsonify({"error": "artist_not_found"}), 404
+    name, artist_id = target
+
+    raw = fetch_all_tracks(artist_id)
+    deduped = _dedupe_tracks(raw)
+    subset = deduped[:subset_size]
+
+    # Bypasses _LYRICS_CACHE entirely (no retry either) so repeat calls against
+    # the same subset at different `workers` values are a fair comparison,
+    # not just replaying cached results from an earlier call.
+    def has_lyrics(t):
+        try:
+            watch_playlist = yt.get_watch_playlist(t["videoId"])
+            lyrics_browse_id = watch_playlist.get("lyrics")
+            if not lyrics_browse_id:
+                return False
+            yt.get_lyrics(lyrics_browse_id)
+            return True
+        except Exception:
+            return False
+
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(has_lyrics, subset))
+    elapsed = time.time() - t0
+
+    return jsonify({
+        "resolved_name": name,
+        "workers": workers,
+        "subset_size": len(subset),
+        "lyrics_ok": sum(results),
+        "lyrics_fail": len(subset) - sum(results),
+        "elapsed_s": round(elapsed, 1),
+    })
+
+
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
