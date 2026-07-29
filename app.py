@@ -751,12 +751,22 @@ def debug_albums():
             })
         return out
 
+    popular = fetch_popular_tracks(artist_id)
+    popular_summary = []
+    for t in popular[:25]:
+        popular_summary.append({
+            "title": t["title"],
+            "videoId": t["videoId"],
+            "has_lyrics": bool(fetch_lyrics(t["videoId"])),
+        })
+
     return jsonify({
         "resolved_name": name,
         "album_count": len(album_entries),
         "single_count": len(single_entries),
         "albums": summarize(album_entries, "album"),
         "singles": summarize(single_entries, "single"),
+        "popular_tracks_first25": popular_summary,
     })
 
 
