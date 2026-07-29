@@ -746,65 +746,6 @@ def suggest():
     return jsonify(names)
 
 
-@app.route("/api/debug/albums")
-def debug_albums():
-    # TEMPORARY diagnostic route -- lists every album/single entry walked for an
-    # artist, to see what's inflating the live track count. Not linked from the UI.
-    artist = (request.args.get("artist") or "").strip()
-    if not artist:
-        return jsonify({"error": "artist is required"}), 400
-    target = find_target_artist(artist)
-    if not target:
-        return jsonify({"error": "artist_not_found"}), 404
-    name, artist_id = target
-
-    artist_page = yt.get_artist(artist_id)
-    album_entries = _collect_album_refs(artist_page, artist_id, "albums")
-    single_entries = _collect_album_refs(artist_page, artist_id, "singles")
-
-    def summarize(entries, kind):
-        out = []
-        for e in entries:
-            out.append({
-                "kind": kind,
-                "title": e.get("title"),
-                "year": e.get("year"),
-                "browseId": e.get("browseId"),
-            })
-        return out
-
-    popular = fetch_popular_tracks(artist_id)
-    popular_summary = []
-    for t in popular[:25]:
-        popular_summary.append({
-            "title": t["title"],
-            "videoId": t["videoId"],
-            "has_lyrics": bool(fetch_lyrics(t["videoId"])),
-        })
-
-    # Mirror fetch_songs(name, "top25") exactly (slice to 25 BEFORE dedup, same
-    # order as fetch_songs), so this matches what /api/quiz/build actually iterates.
-    deduped_top25 = _dedupe_tracks(popular[:25])
-    deduped_summary = []
-    for t in deduped_top25:
-        deduped_summary.append({
-            "title": t["title"],
-            "videoId": t["videoId"],
-            "has_lyrics": bool(fetch_lyrics(t["videoId"])),
-        })
-
-    return jsonify({
-        "resolved_name": name,
-        "album_count": len(album_entries),
-        "single_count": len(single_entries),
-        "albums": summarize(album_entries, "album"),
-        "singles": summarize(single_entries, "single"),
-        "popular_tracks_first25": popular_summary,
-        "deduped_top25_pool_size": len(deduped_top25),
-        "deduped_top25": deduped_summary,
-    })
-
-
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
