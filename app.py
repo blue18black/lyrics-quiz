@@ -273,6 +273,19 @@ def find_target_artist(artist: str) -> tuple[str, str] | None:
 _ARTIST_TRACKS_CACHE: dict[str, list[dict]] = {}
 
 
+# Release titles that are essentially never a genuine A-side studio track and are
+# frequently missing lyrics data entirely (live recordings, instrumental-only
+# "less vocal" mixes, best-of compilations) -- some Japanese-market artists have
+# dozens of these, which were bloating the discography with entries that mostly
+# just failed the lyrics fetch anyway. Matched against the *release* title, not
+# individual track titles, so a legitimately-titled song isn't caught by this.
+_EXCLUDED_RELEASE_RE = re.compile(
+    r"\blive\b|ライブ|less vocal|instrumental|インスト|\bbest\b|ベスト|"
+    r"greatest hits|complete\s*(pack|edition)?|selection",
+    re.IGNORECASE,
+)
+
+
 def _collect_album_refs(artist_page: dict, artist_id: str, section_key: str) -> list[dict]:
     """Fetch every entry in an artist page section (albums/singles), following the
     "show more" pagination when present. Falls back to the initially-shown results if
@@ -289,10 +302,11 @@ def _collect_album_refs(artist_page: dict, artist_id: str, section_key: str) -> 
     try:
         full = yt.get_artist_albums(browse_id, params)
         if len(full) >= len(results):
-            return full
+            results = full
     except Exception:
         pass
-    return results
+
+    return [r for r in results if not _EXCLUDED_RELEASE_RE.search(r.get("title") or "")]
 
 
 def fetch_all_tracks(artist_id: str) -> list[dict]:
