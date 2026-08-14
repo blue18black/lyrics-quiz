@@ -436,6 +436,15 @@ def suggest():
     return jsonify(names)
 
 
+@app.route("/api/debug/album")
+def debug_album():
+    # TEMPORARY diagnostic route -- fetches one known album directly to check
+    # whether Accept-Language actually affects Deezer's localization from this
+    # server's network origin. Not linked from the UI.
+    data = deezer._get(deezer._DEEZER_API_BASE, "/album/59626242/tracks", {"limit": 5})
+    return jsonify(data)
+
+
 @app.route("/api/debug/list")
 def debug_list():
     # TEMPORARY diagnostic route -- lists every track Deezer/iTunes discovery
