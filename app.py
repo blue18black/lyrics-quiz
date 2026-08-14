@@ -450,7 +450,10 @@ def debug_list():
         "artistName": result["artistName"],
         "count": len(result["tracks"]),
         "tracks": [
-            {"rank": t["rank"], "title": t["title"], "artist": t["artist"], "album": t["album"]}
+            {
+                "rank": t["rank"], "title": t["title"], "artist": t["artist"], "album": t["album"],
+                "isrc": t.get("isrc"), "src_id": t.get("src_id"),
+            }
             for t in result["tracks"]
         ],
     })

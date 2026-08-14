@@ -689,6 +689,8 @@ def _to_quiz_track(raw, artist_name):
         "english_title": raw.get("_english_title"),
         "plain_album_title": raw.get("_plain_version_album_title"),
         "plain_artist": (raw.get("_plain_version_artist") or {}).get("name"),
+        "isrc": raw.get("isrc"),  # TEMP: for duplicate diagnosis, remove later
+        "src_id": raw.get("id"),  # TEMP: for duplicate diagnosis, remove later
     }
 
 
