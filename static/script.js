@@ -421,7 +421,7 @@ async function pollJobUntilDone(jobId, signal) {
     const data = await res.json();
     if (data.status === "running") {
       if (data.total > 0) {
-        loadingTextEl.textContent = `問題を読み込み中... (${data.current}/${data.total}曲確認)`;
+        loadingTextEl.textContent = `問題を読み込み中... (${data.current}/${data.total}曲確認 / 歌詞取得済み${data.found}曲)`;
         loadingProgressBarEl.classList.remove("hidden");
         loadingProgressFillEl.style.width = `${(data.current / data.total) * 100}%`;
       } else {

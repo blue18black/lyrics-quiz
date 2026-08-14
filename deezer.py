@@ -659,6 +659,7 @@ def _itunes_track_to_raw_shape(t):
     """iTunesの曲データを、Deezer側のフィルタ関数がそのまま使える形に変換する。
     rankに相当する人気度指標は無いため0固定(Deezer由来の曲より必ず後ろに
     並ぶ)。"""
+    duration_ms = t.get("trackTimeMillis")
     return {
         "id": f"{_ITUNES_ID_PREFIX}{t['trackId']}",
         "title_short": t.get("trackName"),
@@ -666,6 +667,7 @@ def _itunes_track_to_raw_shape(t):
         "rank": 0,
         "artist": {"name": t.get("artistName")},
         "_album_title": t.get("_album_title"),
+        "duration": (duration_ms // 1000) if duration_ms else None,
     }
 
 
@@ -696,6 +698,11 @@ def _to_quiz_track(raw, artist_name):
         "english_title": raw.get("_english_title"),
         "plain_album_title": raw.get("_plain_version_album_title"),
         "plain_artist": (raw.get("_plain_version_artist") or {}).get("name"),
+        # Seconds, when known -- used by app.py as a secondary, artist-independent
+        # signal to confirm a title-matching YT Music candidate is really the same
+        # recording (two completely different songs sharing a title text are very
+        # unlikely to also share almost the exact same duration).
+        "duration": raw.get("duration"),
     }
 
 

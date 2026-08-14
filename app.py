@@ -73,22 +73,117 @@ def _yt_get_album_tracks(browse_id: str) -> list[dict]:
         return []
 
 
-def _search_ytmusic_video(search_title: str, query_suffix: str) -> tuple[str, str, str] | None:
+def _artist_name_variants(artist_name: str | None) -> list[str]:
+    """artist_name plus its parenthetical-stripped bare form (e.g. "辻野かなみ
+    (超ときめき♡宣伝部)" -> also "辻野かなみ"), for both search-query construction
+    and match verification."""
+    if not artist_name:
+        return []
+    bare = re.sub(r"[\(\[（【].*?[\)\]）】]", "", artist_name).strip()
+    variants = [artist_name]
+    if bare and bare != artist_name:
+        variants.append(bare)
+    return variants
+
+
+def _normalize_name_for_match(name: str) -> str:
+    return re.sub(r"[^\w]", "", (name or "").lower())
+
+
+def _names_loosely_match(a: str, b: str) -> bool:
+    a, b = _normalize_name_for_match(a), _normalize_name_for_match(b)
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+_DURATION_TOLERANCE_SECONDS = 3
+
+
+def _duration_closely_matches(candidate: dict, expected_duration: int | None) -> bool:
+    """Two different songs that happen to share a title text are very unlikely to
+    also happen to have almost exactly the same duration -- used as a second,
+    artist-independent way to confirm a title match, for cases where the artist
+    name can't be verified (e.g. YT Music's cross-script search fallback doesn't
+    surface the right candidate for an unusual name)."""
+    if not expected_duration:
+        return False
+    candidate_duration = candidate.get("duration_seconds")
+    if not candidate_duration:
+        return False
+    return abs(candidate_duration - expected_duration) <= _DURATION_TOLERANCE_SECONDS
+
+
+def _candidate_matches_artist(
+    candidate: dict, video_id: str, search_title: str, artist_name: str | None, plain_artist_name: str | None = None
+) -> bool:
+    """Verify a title-matching candidate really belongs to the expected artist --
+    a title match is never accepted on its own, since a generic-enough title (e.g.
+    "Happy Time") can just as easily belong to a completely unrelated song by a
+    different artist (observed: it matched a Korean artist's same-titled track).
+    Tries direct name comparison first, which works whenever both sides are in the
+    same script (true for most non-Japanese artists). That's inconclusive for
+    Japanese artists, since YT Music's (English-locale) search reports the
+    candidate's artist name romanized while Deezer's artist_name is native-script
+    Japanese and shares no characters with the romanized form -- for that case,
+    fall back to a title+artist-name search and check the candidate turns up there
+    too, reusing YT Music's own cross-script fuzzy matching (which reliably
+    resolves a native-script Japanese artist name to the right romanized-credit
+    channel, confirmed empirically) as the verification oracle."""
+    expected_names = _artist_name_variants(artist_name) + _artist_name_variants(plain_artist_name)
+    if not expected_names:
+        return False
+    candidate_names = [a.get("name", "") for a in (candidate.get("artists") or [])]
+    for expected in expected_names:
+        for got in candidate_names:
+            if _names_loosely_match(expected, got):
+                return True
+
+    seen_queries = set()
+    for name in expected_names:
+        if name in seen_queries:
+            continue
+        seen_queries.add(name)
+        for c in _yt_search_songs(f"{search_title} {name}", limit=20):
+            if c.get("videoId") == video_id:
+                return True
+    return False
+
+
+def _search_ytmusic_video(
+    search_title: str,
+    query_suffix: str,
+    artist_name: str | None,
+    plain_artist_name: str | None = None,
+    expected_duration: int | None = None,
+) -> tuple[str, str, str] | None:
     """Search "search_title query_suffix" on YT Music and return (videoId, its own
     cleaned title, album name) of the first audio-only (ATV) candidate whose title
-    matches. None if nothing matches."""
+    matches AND (performing artist matches OR duration closely matches). None if
+    nothing matches."""
     for c in _yt_search_songs(f"{search_title} {query_suffix}"):
         if c.get("videoType") != _YTMUSIC_AUDIO_ONLY_TYPE:
             continue
         song_title = deezer.clean_title(c.get("title") or "")
         if deezer._has_unwanted_keyword(song_title):
             continue
-        if deezer._search_titles_match(search_title, song_title):
-            return c.get("videoId"), song_title, (c.get("album") or {}).get("name")
+        if not deezer._search_titles_match(search_title, song_title):
+            continue
+        video_id = c.get("videoId")
+        if not (
+            _candidate_matches_artist(c, video_id, search_title, artist_name, plain_artist_name)
+            or _duration_closely_matches(c, expected_duration)
+        ):
+            continue
+        return video_id, song_title, (c.get("album") or {}).get("name")
     return None
 
 
-def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | None, artist_name: str | None) -> tuple[str, str] | None:
+def _search_ytmusic_video_by_album_browse(
+    search_title: str,
+    album_title: str | None,
+    artist_name: str | None,
+    plain_artist_name: str | None = None,
+    expected_duration: int | None = None,
+) -> tuple[str, str] | None:
     """Last resort for a song that never shows up in filter="songs" results at all:
     find the one matching album via filter="albums" and scan its own track list."""
     if not album_title:
@@ -104,8 +199,15 @@ def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | 
             song_title = deezer.clean_title(c.get("title") or "")
             if deezer._has_unwanted_keyword(song_title):
                 continue
-            if deezer._search_titles_match(search_title, song_title):
-                return c.get("videoId"), song_title
+            if not deezer._search_titles_match(search_title, song_title):
+                continue
+            video_id = c.get("videoId")
+            if not (
+                _candidate_matches_artist(c, video_id, search_title, artist_name, plain_artist_name)
+                or _duration_closely_matches(c, expected_duration)
+            ):
+                continue
+            return video_id, song_title
     return None
 
 
@@ -149,25 +251,33 @@ def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str] | None:
     artist_name = track.get("artist")
     plain_album_title = track.get("plain_album_title")
     plain_artist_name = track.get("plain_artist")
+    expected_duration = track.get("duration")
 
     default_suffixes = _query_suffixes_for(album_title, artist_name)
     plain_suffixes = _query_suffixes_for(plain_album_title, plain_artist_name) or default_suffixes
     for i, search_title in enumerate(_fallback_search_titles(title)):
         query_suffixes = default_suffixes if i == 0 else plain_suffixes
+        active_artist_name = artist_name if i == 0 else (plain_artist_name or artist_name)
         for _, query_suffix in query_suffixes:
-            result = _search_ytmusic_video(search_title, query_suffix)
+            result = _search_ytmusic_video(
+                search_title, query_suffix, active_artist_name, plain_artist_name, expected_duration
+            )
             if result:
                 return result[0], result[1]
 
     english_title = track.get("english_title")
     if english_title:
         for _, query_suffix in default_suffixes:
-            result = _search_ytmusic_video(english_title, query_suffix)
+            result = _search_ytmusic_video(
+                english_title, query_suffix, artist_name, plain_artist_name, expected_duration
+            )
             if result:
                 return result[0], result[1]
 
     for candidate_album in (album_title, plain_album_title):
-        matched = _search_ytmusic_video_by_album_browse(title, candidate_album, artist_name)
+        matched = _search_ytmusic_video_by_album_browse(
+            title, candidate_album, artist_name, plain_artist_name, expected_duration
+        )
         if matched:
             return matched
     return None
@@ -272,8 +382,11 @@ def build_questions(
     """count=None means "as many as we can find". difficulty="hard" shows a single
     lyric line instead of 2-4, making the source song harder to guess. scope="top50"/
     "top25" limits the song pool to the artist's most popular tracks (by Deezer's
-    per-track rank). on_progress(current, total), if given, is called after each
-    song's YT Music match + lyrics lookup finishes (progress reporting)."""
+    per-track rank). on_progress(current, total, found), if given, is called after
+    each song's YT Music match + lyrics lookup finishes (progress reporting) --
+    found is how many of the songs checked so far actually yielded a playable
+    question, which can be well below current since not every song has a
+    confident YT Music match or has lyrics available."""
     min_lines, max_lines = (1, 1) if difficulty == "hard" else (2, 4)
 
     resolved = fetch_songs(artist, scope)
@@ -292,7 +405,7 @@ def build_questions(
         return resolved_titles.get(id(song), song["title"])
 
     progress_lock = threading.Lock()
-    progress_state = {"current": 0, "total": len(songs)}
+    progress_state = {"current": 0, "total": len(songs), "found": 0}
 
     def build_one(song):
         match = _find_ytmusic_video_for_track(song)
@@ -308,7 +421,9 @@ def build_questions(
         if on_progress:
             with progress_lock:
                 progress_state["current"] += 1
-                on_progress(progress_state["current"], progress_state["total"])
+                if result:
+                    progress_state["found"] += 1
+                on_progress(progress_state["current"], progress_state["total"], progress_state["found"])
         return result
 
     # Matching each song on YT Music + fetching its lyrics is the slow part (up to
@@ -462,12 +577,13 @@ _MAX_JOBS = 50
 
 
 def _run_build_job(job_id: str, artist: str, count: int | None, difficulty: str, scope: str) -> None:
-    def on_progress(current, total):
+    def on_progress(current, total, found):
         with _JOBS_LOCK:
             job = _JOBS.get(job_id)
             if job:
                 job["current"] = current
                 job["total"] = total
+                job["found"] = found
 
     try:
         questions = build_questions(artist, count, difficulty, scope, on_progress=on_progress)
@@ -501,7 +617,7 @@ def build_quiz():
 
     job_id = uuid.uuid4().hex
     with _JOBS_LOCK:
-        _JOBS[job_id] = {"status": "running", "current": 0, "total": 0}
+        _JOBS[job_id] = {"status": "running", "current": 0, "total": 0, "found": 0}
         if len(_JOBS) > _MAX_JOBS:
             del _JOBS[next(iter(_JOBS))]  # dicts preserve insertion order -- evict oldest
 
@@ -517,7 +633,12 @@ def quiz_progress(job_id):
         job = _JOBS.get(job_id)
     if not job:
         return jsonify({"error": "job_not_found"}), 404
-    response = {"status": job["status"], "current": job["current"], "total": job["total"]}
+    response = {
+        "status": job["status"],
+        "current": job["current"],
+        "total": job["total"],
+        "found": job.get("found", 0),
+    }
     if job["status"] == "done":
         response["artist"] = job["artist"]
         response["questions"] = job["questions"]
