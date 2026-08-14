@@ -407,6 +407,23 @@ def suggest():
     return jsonify(names)
 
 
+@app.route("/api/debug/discovery")
+def debug_discovery():
+    # TEMPORARY diagnostic route -- checking whether a local-vs-live gap in
+    # question count comes from Deezer/iTunes discovery or the YT Music
+    # matching/lyrics step. Not linked from the UI.
+    artist = (request.args.get("artist") or "").strip()
+    if not artist:
+        return jsonify({"error": "artist is required"}), 400
+    result = deezer.get_ranked_tracks(artist)
+    if not result:
+        return jsonify({"error": "artist_not_found"}), 404
+    return jsonify({
+        "artistName": result["artistName"],
+        "track_count": len(result["tracks"]),
+    })
+
+
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
