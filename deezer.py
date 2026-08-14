@@ -29,7 +29,14 @@ _ITUNES_SEARCH_API_BASE = "https://itunes.apple.com/search"
 _ITUNES_LOOKUP_API_BASE = "https://itunes.apple.com/lookup"
 
 _session = requests.Session()
-_session.headers.update({"User-Agent": "lyric-quiz/1.0"})
+# Deezer localizes track/album titles based on either the requester's IP
+# geolocation or Accept-Language (undocumented but confirmed: without this,
+# the same artist_id/album_id returns native-script Japanese titles when
+# queried from Japan and romanized titles when queried from elsewhere, e.g.
+# Render's Singapore region -- which then shows up as duplicate songs, since
+# the two scripts share no text once normalized). Pin it to Japanese so
+# results are consistent regardless of where this server happens to run.
+_session.headers.update({"User-Agent": "lyric-quiz/1.0", "Accept-Language": "ja"})
 
 
 def _get(base, path, params=None, retries=2):
