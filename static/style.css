@@ -883,6 +883,8 @@ body.quiz-active .snippet {
 
   body.quiz-active .snippet {
     margin-bottom: clamp(0.35rem, 1vh, 0.6rem);
+    font-size: clamp(1.05rem, 3.2vh, 1.4rem);
+    min-height: 7.5rem;
   }
 
   .choices {

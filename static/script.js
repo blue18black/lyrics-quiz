@@ -256,13 +256,16 @@ function moveChoiceSelection(delta) {
 // is can't be predicted in CSS alone, so instead of ever letting it scroll,
 // shrink the text (not the box) until it actually fits.
 const SNIPPET_MIN_FONT_PX = 12;
+const SNIPPET_MIN_FONT_PX_DESKTOP = 16;
+const DESKTOP_WIDTH_PX = 601;
 
 function fitSnippetText() {
   snippetEl.style.fontSize = "";
   const maxHeight = snippetEl.clientHeight;
   if (!maxHeight) return;
+  const minFontSize = window.innerWidth >= DESKTOP_WIDTH_PX ? SNIPPET_MIN_FONT_PX_DESKTOP : SNIPPET_MIN_FONT_PX;
   let fontSize = parseFloat(getComputedStyle(snippetEl).fontSize);
-  while (snippetEl.scrollHeight > maxHeight + 1 && fontSize > SNIPPET_MIN_FONT_PX) {
+  while (snippetEl.scrollHeight > maxHeight + 1 && fontSize > minFontSize) {
     fontSize -= 1;
     snippetEl.style.fontSize = `${fontSize}px`;
   }

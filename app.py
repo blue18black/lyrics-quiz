@@ -645,5 +645,37 @@ def quiz_progress(job_id):
     return jsonify(response)
 
 
+@app.route("/api/debug/match")
+def debug_match():
+    # Temporary: diagnose why Render's match rate differs from local runs for the
+    # same artist -- reports a per-song breakdown (NO_MATCH / NO_LYRICS / OK)
+    # instead of just a final count, so a region-specific gap can be pinned down.
+    artist = (request.args.get("artist") or "").strip()
+    if not artist:
+        return jsonify({"error": "artist is required"}), 400
+    resolved = fetch_songs(artist, "all")
+    if not resolved:
+        return jsonify({"error": "artist not found"}), 404
+    _, songs = resolved
+
+    def check(song):
+        match = _find_ytmusic_video_for_track(song)
+        if not match:
+            return {"title": song["title"], "artist": song.get("artist"), "status": "NO_MATCH"}
+        video_id, yt_title = match
+        lyrics = fetch_lyrics(video_id)
+        if not lyrics:
+            return {"title": song["title"], "artist": song.get("artist"), "status": "NO_LYRICS", "video_id": video_id}
+        return {"title": song["title"], "artist": song.get("artist"), "status": "OK", "video_id": video_id}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(check, songs))
+
+    counts = {"total": len(results)}
+    for r in results:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    return jsonify({"counts": counts, "results": results})
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050, threaded=True)
