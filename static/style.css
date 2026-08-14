@@ -641,14 +641,33 @@ body.quiz-active .snippet {
 }
 
 .loading {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
   margin-top: 0.85rem;
   padding: 0.7rem 0.9rem;
   border-radius: 12px;
   background: var(--card);
   border: 1px solid var(--card-border);
+}
+
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.loading-progress-bar {
+  margin-top: 0.6rem;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--card-border);
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #ff8fd6);
+  transition: width 0.3s ease;
 }
 
 .spinner {

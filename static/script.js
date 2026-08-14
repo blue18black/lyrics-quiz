@@ -28,6 +28,8 @@ const homeBtn = document.getElementById("home-btn");
 const loadingEl = document.getElementById("loading");
 const loadingTextEl = document.getElementById("loading-text");
 const cancelLoadBtn = document.getElementById("cancel-load-btn");
+const loadingProgressBarEl = document.getElementById("loading-progress-bar");
+const loadingProgressFillEl = document.getElementById("loading-progress-fill");
 
 let selectedCount = "10";
 let selectedDifficulty = "normal";
@@ -392,6 +394,42 @@ nextBtn.addEventListener("click", () => {
 
 let currentLoadController = null;
 
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    }
+  });
+}
+
+const POLL_INTERVAL_MS = 600;
+
+async function pollJobUntilDone(jobId, signal) {
+  while (true) {
+    const res = await fetch(`/api/quiz/progress/${jobId}`, { signal });
+    if (!res.ok) {
+      return { status: "error" };
+    }
+    const data = await res.json();
+    if (data.status === "running") {
+      if (data.total > 0) {
+        loadingTextEl.textContent = `問題を読み込み中... (${data.current}/${data.total}曲確認)`;
+        loadingProgressBarEl.classList.remove("hidden");
+        loadingProgressFillEl.style.width = `${(data.current / data.total) * 100}%`;
+      } else {
+        loadingTextEl.textContent = "曲を検索中...";
+      }
+      await sleep(POLL_INTERVAL_MS, signal);
+      continue;
+    }
+    return data;
+  }
+}
+
 async function startQuiz(artist, count, difficulty, scope) {
   suggestionsEl.classList.add("hidden");
   document.body.classList.remove("quiz-active");
@@ -399,7 +437,9 @@ async function startQuiz(artist, count, difficulty, scope) {
   scoreSection.classList.add("hidden");
   resultsScreen.classList.add("hidden");
   statusEl.textContent = "";
-  loadingTextEl.textContent = "問題を読み込み中...";
+  loadingTextEl.textContent = "曲を検索中...";
+  loadingProgressBarEl.classList.add("hidden");
+  loadingProgressFillEl.style.width = "0%";
   loadingEl.classList.remove("hidden");
   startBtn.disabled = true;
   setSetupControlsDisabled(true);
@@ -408,21 +448,30 @@ async function startQuiz(artist, count, difficulty, scope) {
   currentLoadController = controller;
 
   try {
-    const res = await fetch("/api/quiz/build", {
+    const buildRes = await fetch("/api/quiz/build", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ artist, count, difficulty, scope }),
       signal: controller.signal,
     });
 
-    if (!res.ok) {
+    if (!buildRes.ok) {
       setupScreen.classList.remove("hidden");
       statusEl.textContent =
         "問題を取得できませんでした。アーティスト名を確認するか、もう一度試してください。";
       return;
     }
 
-    const data = await res.json();
+    const { job_id: jobId } = await buildRes.json();
+    const data = await pollJobUntilDone(jobId, controller.signal);
+
+    if (data.status !== "done") {
+      setupScreen.classList.remove("hidden");
+      statusEl.textContent =
+        "問題を取得できませんでした。アーティスト名を確認するか、もう一度試してください。";
+      return;
+    }
+
     questions = data.questions;
     questionIndex = 0;
     score = { correct: 0, total: 0 };

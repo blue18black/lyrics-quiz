@@ -75,9 +75,14 @@
     </section>
 
     <div id="loading" class="loading hidden">
-      <span class="spinner" aria-hidden="true"></span>
-      <p class="loading-text" id="loading-text"></p>
-      <button id="cancel-load-btn" class="cancel-load-btn" type="button">中止</button>
+      <div class="loading-row">
+        <span class="spinner" aria-hidden="true"></span>
+        <p class="loading-text" id="loading-text"></p>
+        <button id="cancel-load-btn" class="cancel-load-btn" type="button">中止</button>
+      </div>
+      <div id="loading-progress-bar" class="loading-progress-bar hidden">
+        <div id="loading-progress-fill" class="loading-progress-fill"></div>
+      </div>
     </div>
 
     <p id="status" class="status"></p>

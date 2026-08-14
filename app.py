@@ -1,7 +1,9 @@
 import base64
 import random
 import re
+import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, jsonify, render_template, request
@@ -56,10 +58,10 @@ def _yt_get_album_tracks(browse_id: str) -> list[dict]:
         return []
 
 
-def _search_ytmusic_video(search_title: str, query_suffix: str) -> tuple[str, str] | None:
-    """Search "search_title query_suffix" on YT Music and return the (videoId, album
-    name) of the first audio-only (ATV) candidate whose title matches. None if
-    nothing matches."""
+def _search_ytmusic_video(search_title: str, query_suffix: str) -> tuple[str, str, str] | None:
+    """Search "search_title query_suffix" on YT Music and return (videoId, its own
+    cleaned title, album name) of the first audio-only (ATV) candidate whose title
+    matches. None if nothing matches."""
     for c in _yt_search_songs(f"{search_title} {query_suffix}"):
         if c.get("videoType") != _YTMUSIC_AUDIO_ONLY_TYPE:
             continue
@@ -67,11 +69,11 @@ def _search_ytmusic_video(search_title: str, query_suffix: str) -> tuple[str, st
         if deezer._has_unwanted_keyword(song_title):
             continue
         if deezer._search_titles_match(search_title, song_title):
-            return c.get("videoId"), (c.get("album") or {}).get("name")
+            return c.get("videoId"), song_title, (c.get("album") or {}).get("name")
     return None
 
 
-def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | None, artist_name: str | None) -> str | None:
+def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | None, artist_name: str | None) -> tuple[str, str] | None:
     """Last resort for a song that never shows up in filter="songs" results at all:
     find the one matching album via filter="albums" and scan its own track list."""
     if not album_title:
@@ -88,7 +90,7 @@ def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | 
             if deezer._has_unwanted_keyword(song_title):
                 continue
             if deezer._search_titles_match(search_title, song_title):
-                return c.get("videoId")
+                return c.get("videoId"), song_title
     return None
 
 
@@ -116,12 +118,15 @@ def _fallback_search_titles(title: str) -> list[str]:
     return titles
 
 
-def _find_ytmusic_video_for_track(track: dict) -> str | None:
-    """Find the YT Music videoId matching a Deezer-ranked track, by title + the
-    single/album/EP it was released on (most reliable -- that's the same release
-    Deezer's ranking refers to), then title + performing artist name, then (if the
-    track has no native-script title) the romanized/English title, then finally by
-    browsing the one matching album's own track list directly."""
+def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str] | None:
+    """Find the (videoId, title) matching a Deezer-ranked track on YT Music, by
+    title + the single/album/EP it was released on (most reliable -- that's the
+    same release Deezer's ranking refers to), then title + performing artist name,
+    then (if the track has no native-script title) the romanized/English title,
+    then finally by browsing the one matching album's own track list directly.
+    The returned title is YT Music's own (typically native-script Japanese), used
+    for display instead of Deezer's -- Deezer's title_short is sometimes only the
+    romanized/English form for an otherwise Japanese-titled song."""
     title = track.get("title")
     if not title:
         return None
@@ -137,14 +142,14 @@ def _find_ytmusic_video_for_track(track: dict) -> str | None:
         for _, query_suffix in query_suffixes:
             result = _search_ytmusic_video(search_title, query_suffix)
             if result:
-                return result[0]
+                return result[0], result[1]
 
     english_title = track.get("english_title")
     if english_title:
         for _, query_suffix in default_suffixes:
             result = _search_ytmusic_video(english_title, query_suffix)
             if result:
-                return result[0]
+                return result[0], result[1]
 
     for candidate_album in (album_title, plain_album_title):
         matched = _search_ytmusic_video_by_album_browse(title, candidate_album, artist_name)
@@ -247,11 +252,13 @@ def build_questions(
     count: int | None,
     difficulty: str = "normal",
     scope: str = "all",
+    on_progress=None,
 ) -> list[dict]:
     """count=None means "as many as we can find". difficulty="hard" shows a single
     lyric line instead of 2-4, making the source song harder to guess. scope="top50"/
     "top25" limits the song pool to the artist's most popular tracks (by Deezer's
-    per-track rank)."""
+    per-track rank). on_progress(current, total), if given, is called after each
+    song's YT Music match + lyrics lookup finishes (progress reporting)."""
     min_lines, max_lines = (1, 1) if difficulty == "hard" else (2, 4)
 
     resolved = fetch_songs(artist, scope)
@@ -259,19 +266,35 @@ def build_questions(
         return []
     _, songs = resolved
 
-    all_titles = [s["title"] for s in songs]
+    # Deezer's title_short is sometimes only the romanized/English form for an
+    # otherwise Japanese-titled song -- once a track's matching YT Music video is
+    # found, its own (typically native-script) title is used for display instead.
+    # Keyed by the track dict's id() so distractor titles pick up the same
+    # resolution as the correct answer wherever the same song is both.
+    resolved_titles: dict[int, str] = {}
+
+    def display_title(song):
+        return resolved_titles.get(id(song), song["title"])
+
+    progress_lock = threading.Lock()
+    progress_state = {"current": 0, "total": len(songs)}
 
     def build_one(song):
-        video_id = _find_ytmusic_video_for_track(song)
-        if not video_id:
-            return None
-        lyrics = fetch_lyrics(video_id)
-        if not lyrics:
-            return None
-        snippet = extract_snippet(lyrics, song["title"], min_lines=min_lines, max_lines=max_lines)
-        if not snippet:
-            return None
-        return song, snippet
+        match = _find_ytmusic_video_for_track(song)
+        result = None
+        if match:
+            video_id, yt_title = match
+            lyrics = fetch_lyrics(video_id)
+            if lyrics:
+                resolved_titles[id(song)] = yt_title
+                snippet = extract_snippet(lyrics, yt_title, min_lines=min_lines, max_lines=max_lines)
+                if snippet:
+                    result = (song, snippet)
+        if on_progress:
+            with progress_lock:
+                progress_state["current"] += 1
+                on_progress(progress_state["current"], progress_state["total"])
+        return result
 
     # Matching each song on YT Music + fetching its lyrics is the slow part (up to
     # a few network calls per song), and doing it one song at a time was slow
@@ -292,26 +315,32 @@ def build_questions(
         primary, backfill = songs[:nominal], songs[nominal:]
     else:
         primary, backfill = songs, []
+    progress_state["total"] = len(primary)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         found = [r for r in pool.map(build_one, primary) if r]
 
     if count is not None and len(found) < count and backfill:
+        progress_state["current"] = 0
+        progress_state["total"] = len(backfill)
         with ThreadPoolExecutor(max_workers=8) as pool:
             found += [r for r in pool.map(build_one, backfill) if r]
 
     random.shuffle(found)  # presentation order, independent of rank
+
+    all_titles = [display_title(s) for s in songs]
 
     questions = []
     for song, snippet in found:
         if count is not None and len(questions) >= count:
             break
 
-        distractor_pool = [t for t in all_titles if t != song["title"]]
+        title = display_title(song)
+        distractor_pool = [t for t in all_titles if t != title]
         if len(distractor_pool) < 3:
             continue
         distractors = random.sample(distractor_pool, 3)
-        choices = distractors + [song["title"]]
+        choices = distractors + [title]
         random.shuffle(choices)
 
         questions.append({
@@ -320,7 +349,7 @@ def build_questions(
             # base64'd, not plaintext -- the answer is still technically visible to
             # anyone who inspects the network response, but this at least keeps it
             # from being readable at a glance.
-            "a": base64.b64encode(song["title"].encode("utf-8")).decode("ascii"),
+            "a": base64.b64encode(title.encode("utf-8")).decode("ascii"),
         })
 
     return questions
@@ -407,6 +436,41 @@ def suggest():
     return jsonify(names)
 
 
+# Building a quiz can take anywhere from a few seconds to well over a minute
+# (matching each candidate song against YT Music + fetching its lyrics), so
+# /api/quiz/build kicks the work off in a background thread and returns
+# immediately with a job id; the frontend polls /api/quiz/progress/<job_id> to
+# show a live "X/Y songs checked" progress bar and pick up the result once done.
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+_MAX_JOBS = 50
+
+
+def _run_build_job(job_id: str, artist: str, count: int | None, difficulty: str, scope: str) -> None:
+    def on_progress(current, total):
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if job:
+                job["current"] = current
+                job["total"] = total
+
+    try:
+        questions = build_questions(artist, count, difficulty, scope, on_progress=on_progress)
+    except Exception:
+        questions = None
+
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return  # evicted (see _MAX_JOBS) before finishing
+        if questions:
+            job["status"] = "done"
+            job["artist"] = artist
+            job["questions"] = questions
+        else:
+            job["status"] = "error"
+
+
 @app.route("/api/quiz/build", methods=["POST"])
 def build_quiz():
     data = request.get_json(force=True) or {}
@@ -420,10 +484,29 @@ def build_quiz():
     if not artist:
         return jsonify({"error": "artist is required"}), 400
 
-    questions = build_questions(artist, count, difficulty, scope)
-    if not questions:
-        return jsonify({"error": "no_quiz_available"}), 404
-    return jsonify({"artist": artist, "questions": questions})
+    job_id = uuid.uuid4().hex
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {"status": "running", "current": 0, "total": 0}
+        if len(_JOBS) > _MAX_JOBS:
+            del _JOBS[next(iter(_JOBS))]  # dicts preserve insertion order -- evict oldest
+
+    threading.Thread(
+        target=_run_build_job, args=(job_id, artist, count, difficulty, scope), daemon=True
+    ).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/quiz/progress/<job_id>")
+def quiz_progress(job_id):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    response = {"status": job["status"], "current": job["current"], "total": job["total"]}
+    if job["status"] == "done":
+        response["artist"] = job["artist"]
+        response["questions"] = job["questions"]
+    return jsonify(response)
 
 
 if __name__ == "__main__":
