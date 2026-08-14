@@ -869,3 +869,16 @@ body.quiz-active .snippet {
     padding-bottom: 0.5rem;
   }
 }
+
+@media (min-width: 601px) {
+  /* Desktop game screen: the snippet already absorbs whatever height is left
+     over from the topbar/choices/feedback/next-button (same mechanism as the
+     phone layout above), but a large monitor's generous vh-based clamps left
+     the choice buttons taking more room than they need, which could still
+     push the snippet down to its scrolling floor on a shorter window. Trim
+     the buttons down a bit so there's more slack for the snippet. */
+  .choices button {
+    padding: clamp(0.2rem, 0.9vh, 0.4rem) 0.9rem;
+    min-height: calc(clamp(0.2rem, 0.9vh, 0.4rem) * 2 + 1.35em * 2);
+  }
+}

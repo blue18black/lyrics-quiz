@@ -12,6 +12,12 @@ from ytmusicapi import YTMusic
 import deezer
 
 app = Flask(__name__)
+# Force browsers to revalidate static/*.css and *.js on every request instead of
+# trusting a locally cached copy for a while -- otherwise a browser that already
+# had the page open can keep running an old script.js/style.css for a long time
+# after a deploy, since neither file's URL changes between deploys.
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
 # English locale is used for all catalog/track fetching -- Japanese-artist track
 # titles come through in Japanese either way (with a romanized " - romaji" suffix
 # that deezer.clean_title() strips), but Japanese locale makes YT Music surface extra
