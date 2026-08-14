@@ -268,10 +268,49 @@ def _pick_winner(group):
 
 
 def _dedupe_tracks(tracks):
+    # Union-find: group tracks that share EITHER a normalized title key OR an
+    # ISRC (International Standard Recording Code -- identifies the specific
+    # recording regardless of what script/language its title happens to be
+    # localized to). Deezer can list the exact same recording under both a
+    # romanized and a native-script title -- e.g. for a merge-group artist
+    # whose IDs return differently-localized text depending on the
+    # requester's region -- and normalize_key alone can't catch that, since
+    # the two titles share no text at all once normalized ("Kisetsuhazureno
+    # Tokimeki Summer" vs. "季節外れのときめき♡サマー").
+    parent = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for t in tracks:
+        parent.setdefault(t["id"], t["id"])
+
+    by_title_key = defaultdict(list)
+    by_isrc = defaultdict(list)
+    for t in tracks:
+        by_title_key[normalize_key(t.get("title_short"))].append(t["id"])
+        isrc = t.get("isrc")
+        if isrc:
+            by_isrc[isrc].append(t["id"])
+
+    for ids in by_title_key.values():
+        for other_id in ids[1:]:
+            union(ids[0], other_id)
+    for ids in by_isrc.values():
+        for other_id in ids[1:]:
+            union(ids[0], other_id)
+
     groups = defaultdict(list)
     for t in tracks:
-        key = normalize_key(t.get("title_short"))
-        groups[key].append(t)
+        groups[find(t["id"])].append(t)
 
     winners = []
     for group in groups.values():
