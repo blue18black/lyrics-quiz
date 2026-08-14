@@ -7,523 +7,161 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, jsonify, render_template, request
 from ytmusicapi import YTMusic
 
+import deezer
+
 app = Flask(__name__)
 # English locale is used for all catalog/track fetching -- Japanese-artist track
 # titles come through in Japanese either way (with a romanized " - romaji" suffix
-# that clean_title() strips), but Japanese locale makes YT Music surface extra
+# that deezer.clean_title() strips), but Japanese locale makes YT Music surface extra
 # katakana-transliterated duplicate tracks for non-Japanese artists (e.g. "Blinding
 # Lights" also appearing as "ブラインディング・ライツ"). Japanese locale is only used
-# separately (yt_ja) to resolve a Japanese artist's native display name, since
-# English-locale search/artist results romanize it (e.g. "Cho Tokimeki Sendenbu"
+# separately (yt_ja) for the artist-name suggestion dropdown, since English-locale
+# search results romanize Japanese artist names (e.g. "Cho Tokimeki Sendenbu"
 # instead of "超ときめき♡宣伝部").
 yt = YTMusic()
 yt_ja = YTMusic(language="ja")
 
 
-def clean_title(title: str) -> str:
-    """Collapse "official title - romanized/duplicate title" into just the official title.
+# ---- Song discovery: Deezer for the catalog/ranking, YT Music for lyrics ----
+#
+# Deezer (deezer.py) finds and ranks the artist's songs -- see that module's
+# docstring for why (no MV/live-video mixing, a per-track popularity rank
+# covering the whole catalog). Neither Deezer's nor iTunes' public API expose
+# lyrics text at all, so lyrics still have to come from YT Music: each
+# Deezer-ranked track is searched for on YT Music (by title + the single/
+# album/EP it's released on, then by title + performing artist name) to find
+# the matching video, and fetch_lyrics() is called on that.
 
-    YouTube Music frequently stores non-English titles as "日本語タイトル - Romanized Title".
-    We keep segments (split on " - ") up to the first one that's pure ASCII, since that's
-    almost always the redundant romanization rather than part of the real title.
-    """
-    parts = [p for p in title.split(" - ") if p.strip()]
-    if not parts:
-        return title.strip()
-
-    kept = [parts[0]]
-    for part in parts[1:]:
-        if any(ord(ch) > 127 for ch in part):
-            kept.append(part)
-        else:
-            break
-    return " - ".join(kept).strip() or title.strip()
+_YTMUSIC_AUDIO_ONLY_TYPE = "MUSIC_VIDEO_TYPE_ATV"
 
 
-# Song-fetching / dedup logic below is ported from YouTube Music/playlist_builder.py,
-# which handles instrumental filtering and duplicate-version resolution more accurately
-# than simple regex heuristics.
-
-INSTRUMENTAL_KEYWORDS = [
-    "instrumental", "off vocal", "offvocal", "backing track", "less vocal",
-    "インスト", "オフボーカル", "カラオケ", "レスボーカル",
-]
-
-
-def is_instrumental(title: str) -> bool:
-    t = title.lower()
-    return any(k.lower() in t for k in INSTRUMENTAL_KEYWORDS)
-
-
-#  Detects trailing remix/version tags that aren't wrapped in brackets, e.g.
-#  "夢見る 15歳 PAX JAPONICA GROOVE REMIX".
-_TRAILING_VARIANT_RE = re.compile(
-    r"\s+(?:[a-z0-9.\-']+\s+)*(remix|re-mix|mix|version|ver\.?|remaster(?:ed)?|type\s*\d*)\s*$",
-    re.IGNORECASE,
-)
-#  "原題 - ローマ字表記" / "曲名 -Live ver.- - Romaji" style suffixes: everything
-#  from the first " -" onward is a romanization or version tag, not part of the title.
-_SPACE_HYPHEN_RE = re.compile(r"\s-")
-#  A "-tag-" pair (hyphens with no space before the first one) marks a version tag,
-#  as opposed to the single " - " that separates title from romanization.
-_PAIRED_HYPHEN_RE = re.compile(r"-[^-]+-")
-_BRACKET_RE = re.compile(r"[\(\[（【]")
-
-
-def normalize_title(title: str) -> str:
-    """Dedup key for grouping different releases of the "same" song."""
-    t = title.lower()
-    t = re.sub(r"[\(\[（【].*[\)\]）】]", "", t)
-    t = re.sub(r"feat\.?.*", "", t)
-    t = _SPACE_HYPHEN_RE.split(t, maxsplit=1)[0]
-    t = _TRAILING_VARIANT_RE.sub("", t)
-    t = re.sub(r"[^\w\s]", "", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-
-def strip_variant_for_display(title: str) -> str:
-    """Same trimming rules as normalize_title, but keeping case/punctuation
-    intact so the result is presentable in the quiz UI."""
-    t = re.sub(r"[\(\[（【].*[\)\]）】]", "", title)
-    t = re.sub(r"feat\.?.*", "", t, flags=re.IGNORECASE)
-    t = _SPACE_HYPHEN_RE.split(t, maxsplit=1)[0]
-    t = _TRAILING_VARIANT_RE.sub("", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t or title.strip()
-
-
-def _has_variant_qualifier(title: str) -> bool:
-    return (
-        bool(_BRACKET_RE.search(title))
-        or bool(_TRAILING_VARIANT_RE.search(title))
-        or bool(_PAIRED_HYPHEN_RE.search(title))
-    )
-
-
-def _year_value(year):
+def _yt_search_songs(query: str, limit: int = 8) -> list[dict]:
     try:
-        return -int(year)
-    except (TypeError, ValueError):
-        return float("-inf")
-
-
-def _pick_winner(unique: list[dict]) -> dict:
-    """Pick the canonical release among duplicate titles:
-    1) prefer releases without a version qualifier (unless every release has one)
-    2) prefer the oldest release
-    3) prefer single/EP over an album track
-    4) prefer the regular edition (通常盤) release
-    """
-    plain = [t for t in unique if not _has_variant_qualifier(t["title"])]
-    candidates = plain if plain else unique
-    return max(
-        candidates,
-        key=lambda t: (
-            _year_value(t["_year"]),
-            1 if t["_type"] in ("single", "ep") else 0,
-            1 if "通常盤" in (t.get("albumName") or "") else 0,
-        ),
-    )
-
-
-_DOMINANT_SONG_VOTES = 8
-# An exact-name match with fewer votes than this is treated as "song search
-# just doesn't have a reliable signal for this query" rather than "a real
-# contest" -- see the song_dominates_exact comment in find_target_artist.
-_EXACT_MATCH_CONTEST_FLOOR = 2
-
-
-def _is_pure_katakana(s: str) -> bool:
-    return bool(s) and all("゠" <= ch <= "ヿ" or ch in " ・-.'" for ch in s)
-
-
-def _is_ascii(s: str) -> bool:
-    return bool(s) and all(ord(ch) < 128 for ch in s)
-
-
-def find_target_artist(artist: str) -> tuple[str, str] | None:
-    """Resolve a (possibly loosely-typed) artist name to a canonical (name, channelId).
-
-    Two independent signals are combined:
-    1) Majority vote: the most common primary artist among "songs"-filtered search
-       results. YouTube Music often stores names in a different script/romanization
-       than what the user typed (e.g. "私立恵比寿中学" is catalogued as "Shiritsu Ebisu
-       Chugaku"), so string equality doesn't work -- but this correctly disambiguates
-       ambiguous single-word queries like "SEKAI" (-> SEKAI NO OWARI, based on which
-       artist's songs actually dominate the results) where YT Music's own artist search
-       ranks a same-named but irrelevant channel first.
-    2) YT Music's own "artists"-filtered search, top result. This handles nicknames/
-       abbreviations well (e.g. "ミスチル" -> Mr.Children) that barely match any song
-       titles at all for (1).
-
-    When they agree, great. When they disagree, (1) is only trusted if its winner both
-    clears an absolute vote floor AND leads the runner-up by a wide margin -- otherwise
-    (2) wins. Two failure modes motivate this:
-    - Generic-word queries (e.g. "Mr.Children" typed in English) can make (1) pull back
-      a pile of loosely/fuzzily matched, totally unrelated songs (a "Kids" by MGMT, a
-      "Mr. Brightside" by The Killers, ...) where the "winning" artist only has a couple
-      of scattered votes out of many candidates -- noise that looks like a majority but
-      isn't (fails the absolute floor).
-    - Genuine name collisions (e.g. "aiko" -> the Japanese singer-songwriter vs. "Jhené
-      Aiko") can give two real, both-popular artists close vote counts (19 vs. 17) --
-      neither is a clear majority, so a runner-up-margin comparison is a near coin flip
-      that flips between calls as YT Music's own result ordering/counts fluctuate.
-
-    To make name collisions like "aiko" deterministic, an *exact* (case-insensitive)
-    match between the query and an "artists"-filtered result's name is treated as its
-    own strong signal, separate from the runner-up margin above: it wins unless a
-    different artist's songs outnumber it by a wide (2x) margin. That margin is checked
-    against the exact match's *own* vote count (not the runner-up's), which is a much
-    larger, noise-tolerant gap for real collisions -- "aiko" is 17 vs. 19 (~1.1x, exact
-    match wins) while "SEKAI" (which exactly matches a small, unrelated channel) is 4
-    vs. SEKAI NO OWARI's 10 (2.5x, song votes win).
-    """
-    def _search_songs():
-        return yt.search(artist, filter="songs", limit=25)
-
-    def _search_artists():
-        try:
-            return yt.search(artist, filter="artists", limit=10)
-        except Exception:
-            return []
-
-    # These two lookups are independent -- run them concurrently instead of back to
-    # back, since each is a separate network round-trip to YT Music.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        songs_future = pool.submit(_search_songs)
-        artists_future = pool.submit(_search_artists)
-        results = songs_future.result()
-        artist_results = artists_future.result()
-
-    counts: dict[str, int] = {}
-    for r in results:
-        artists = r.get("artists") or []
-        if not artists:
-            continue
-        artist_id = artists[0].get("id")
-        if artist_id:
-            counts[artist_id] = counts.get(artist_id, 0) + 1
-    sorted_counts = sorted(counts.values(), reverse=True)
-    song_vote_id = max(counts, key=counts.get) if counts else None
-    song_vote_count = sorted_counts[0] if sorted_counts else 0
-    runner_up_count = sorted_counts[1] if len(sorted_counts) > 1 else 0
-
-    artist_search_id = artist_results[0].get("browseId") if artist_results else None
-
-    query_norm = artist.strip().lower()
-    exact_match_ids = [
-        r["browseId"] for r in artist_results
-        if r.get("browseId") and (r.get("artist") or "").strip().lower() == query_norm
-    ]
-    exact_match_id = None
-    if exact_match_ids:
-        # Several results can carry the same exact name (homonym channels); prefer
-        # whichever one actually shows up in the song-vote data, since that's the
-        # one with a real catalog rather than a near-empty duplicate/ghost channel.
-        exact_match_id = max(exact_match_ids, key=lambda aid: counts.get(aid, 0))
-    exact_match_votes = counts.get(exact_match_id, 0) if exact_match_id else 0
-
-    is_dominant = song_vote_count >= _DOMINANT_SONG_VOTES and song_vote_count >= runner_up_count * 1.5
-
-    if exact_match_id:
-        # Only let the song-vote signal override an exact artist-name match when
-        # the exact match ALSO has a meaningful vote count of its own (a genuine
-        # contest between two charting artists, like aiko 17 vs. Jhené Aiko 19).
-        # Generic-word queries (e.g. "Mr.Children") can leave the correct exact
-        # match at 0-1 votes simply because song search doesn't reliably surface
-        # its own songs for that query -- in that case *any* small, noisy vote
-        # count elsewhere would otherwise "beat" it by the 2x rule below, since
-        # doubling ~0 is still ~0.
-        song_dominates_exact = (
-            song_vote_id
-            and song_vote_id != exact_match_id
-            and song_vote_count >= _DOMINANT_SONG_VOTES
-            and exact_match_votes >= _EXACT_MATCH_CONTEST_FLOOR
-            and song_vote_count >= exact_match_votes * 2
-        )
-        artist_id = song_vote_id if song_dominates_exact else exact_match_id
-    elif song_vote_id and (song_vote_id == artist_search_id or is_dominant):
-        artist_id = song_vote_id
-    elif artist_search_id:
-        artist_id = artist_search_id
-    else:
-        artist_id = song_vote_id
-
-    if not artist_id:
-        return None
-
-    # English-locale search romanizes non-English artist names (e.g. "Cho Tokimeki
-    # Sendenbu" instead of "超ときめき♡宣伝部"), so ja-locale is generally the better
-    # display name -- except it also transliterates genuinely Western artist names into
-    # katakana (e.g. "The Weeknd" -> "ザ・ウィークエンド"), which we don't want. Treat a
-    # pure-katakana ja-name paired with a plain-ASCII en-name as that unwanted case and
-    # keep the original instead.
-    def _get_ja_name():
-        try:
-            return yt_ja.get_artist(artist_id).get("name")
-        except Exception:
-            return None
-
-    def _get_en_name():
-        try:
-            return yt.get_artist(artist_id).get("name")
-        except Exception:
-            return None
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        ja_future = pool.submit(_get_ja_name)
-        en_future = pool.submit(_get_en_name)
-        ja_name = ja_future.result()
-        en_name = en_future.result()
-
-    if ja_name and _is_pure_katakana(ja_name) and en_name and _is_ascii(en_name):
-        name = en_name
-    else:
-        name = ja_name or en_name or artist
-    return name, artist_id
-
-
-_ARTIST_TRACKS_CACHE: dict[str, list[dict]] = {}
-
-
-# Release titles that are essentially never a genuine A-side studio track and are
-# frequently missing lyrics data entirely (live recordings, instrumental-only
-# "less vocal" mixes, best-of compilations) -- some Japanese-market artists have
-# dozens of these, which were bloating the discography with entries that mostly
-# just failed the lyrics fetch anyway. Matched against the *release* title, not
-# individual track titles, so a legitimately-titled song isn't caught by this.
-_EXCLUDED_RELEASE_RE = re.compile(
-    r"\blive\b|ライブ|less vocal|instrumental|インスト|\bbest\b|ベスト|"
-    r"greatest hits|complete\s*(pack|edition)?|selection",
-    re.IGNORECASE,
-)
-
-
-def _collect_album_refs(artist_page: dict, artist_id: str, section_key: str) -> list[dict]:
-    """Fetch every entry in an artist page section (albums/singles), following the
-    "show more" pagination when present. Falls back to the initially-shown results if
-    the paginated fetch errors out or unexpectedly returns fewer entries than that."""
-    section = artist_page.get(section_key) or {}
-    results = section.get("results", [])
-    params = section.get("params")
-    if not params:
-        return results
-
-    # The "show more" target is the section's own browseId (a discography-specific
-    # id), not the artist's regular browseId.
-    browse_id = section.get("browseId") or artist_id
-    try:
-        full = yt.get_artist_albums(browse_id, params)
-        if len(full) >= len(results):
-            results = full
+        return yt.search(query, filter="songs", limit=limit)
     except Exception:
-        pass
-
-    return [r for r in results if not _EXCLUDED_RELEASE_RE.search(r.get("title") or "")]
-
-
-def fetch_all_tracks(artist_id: str) -> list[dict]:
-    """Walk the artist's full discography (every album/single/EP) instead of relying on
-    fuzzy search, so obscure b-sides aren't missed just because they rank low in search."""
-    if artist_id in _ARTIST_TRACKS_CACHE:
-        return _ARTIST_TRACKS_CACHE[artist_id]
-
-    artist_page = yt.get_artist(artist_id)
-
-    album_entries = _collect_album_refs(artist_page, artist_id, "albums")
-    single_entries = _collect_album_refs(artist_page, artist_id, "singles")
-
-    # YT Music returns each section newest-first; reverse so that, once sorted by
-    # year below, entries within the same year keep their original release order.
-    album_entries = list(reversed(album_entries))
-    single_entries = list(reversed(single_entries))
-
-    for entry in single_entries:
-        entry["_type_rank"] = 0
-    for entry in album_entries:
-        entry["_type_rank"] = 1
-
-    def entry_year(entry):
-        try:
-            return int(entry.get("year"))
-        except (TypeError, ValueError):
-            return 9999  # unknown year: treat as newest, sort to the end
-
-    # Oldest -> newest overall; singles/EPs before albums within the same year.
-    all_entries = sorted(
-        single_entries + album_entries,
-        key=lambda e: (entry_year(e), e["_type_rank"]),
-    )
-
-    seen_album_ids = set()
-    album_ids = []
-    for entry in all_entries:
-        album_id = entry.get("browseId")
-        if not album_id or album_id in seen_album_ids:
-            continue
-        seen_album_ids.add(album_id)
-        album_ids.append(album_id)
-
-    def fetch_album(album_id):
-        try:
-            return yt.get_album(album_id)
-        except Exception:
-            return None
-
-    # A prolific artist can have 50-100+ albums/singles -- fetching them one at a
-    # time was the slow part of walking a full discography. These are independent
-    # lookups, so fetch them concurrently instead.
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        albums = pool.map(fetch_album, album_ids)
-
-    tracks = []
-    for album_id, album in zip(album_ids, albums):
-        if not album:
-            continue
-        year = int(album["year"]) if album.get("year") else None
-        album_type = (album.get("type") or "").lower()
-        album_name = album.get("title")
-        for t in album.get("tracks", []):
-            title, video_id = t.get("title"), t.get("videoId")
-            if not title or not video_id:
-                continue
-            tracks.append({
-                "title": title,
-                "videoId": video_id,
-                "albumId": album_id,
-                "albumName": album_name,
-                "_year": year,
-                "_type": album_type,
-            })
-
-    _ARTIST_TRACKS_CACHE[artist_id] = tracks
-    return tracks
-
-
-def _fetch_view_count(video_id: str) -> int:
-    try:
-        details = yt.get_song(video_id).get("videoDetails") or {}
-        return int(details.get("viewCount") or 0)
-    except Exception:
-        return 0
-
-
-_ARTIST_RANKED_CACHE: dict[str, list[dict]] = {}
-
-
-def fetch_ranked_tracks(artist_id: str) -> list[dict]:
-    """Rank the full discography by view count ourselves, for Top25/Top50 scope.
-    YT Music's own "Top Songs" playlist was tried first, but for at least some
-    artists it's a small, seemingly fixed-size shelf (~30 tracks) regardless of
-    how large their actual catalog is -- not a real reflection of "most popular
-    songs" once an artist has more than that many releases."""
-    if artist_id in _ARTIST_RANKED_CACHE:
-        return _ARTIST_RANKED_CACHE[artist_id]
-
-    tracks = fetch_all_tracks(artist_id)
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        view_counts = list(pool.map(_fetch_view_count, [t["videoId"] for t in tracks]))
-
-    ranked = [t for t, _ in sorted(zip(tracks, view_counts), key=lambda pair: pair[1], reverse=True)]
-    _ARTIST_RANKED_CACHE[artist_id] = ranked
-    return ranked
-
-
-_ARTIST_VIDEO_CACHE: dict[str, list[dict]] = {}
-_VIDEO_TITLE_RE = re.compile(r"[「『]([^」』]+)[」』]")
-_LIVE_VIDEO_RE = re.compile(r"live|tour|ライブ|ツアー", re.IGNORECASE)
-
-
-def fetch_video_tracks(artist_id: str) -> list[dict]:
-    """Some major-label artists (e.g. Mr.Children) aren't fully synced to YT Music's
-    structured catalog -- no albums/singles sections, an empty/near-empty Top Songs
-    playlist -- but do have official music videos uploaded, listed in the artist
-    page's "videos" section as "<Artist>「<Song>」MUSIC VIDEO"-style titles. Used as a
-    last-resort fallback when the normal catalog sources come up empty."""
-    if artist_id in _ARTIST_VIDEO_CACHE:
-        return _ARTIST_VIDEO_CACHE[artist_id]
-
-    artist_page = yt.get_artist(artist_id)
-    videos_section = artist_page.get("videos") or {}
-    browse_id = videos_section.get("browseId")
-
-    raw_tracks = videos_section.get("results", [])
-    if browse_id:
-        try:
-            playlist = yt.get_playlist(browse_id, limit=100)
-            if playlist.get("tracks"):
-                raw_tracks = playlist["tracks"]
-        except Exception:
-            pass
-
-    tracks = []
-    for t in raw_tracks:
-        raw_title, video_id = t.get("title"), t.get("videoId")
-        if not raw_title or not video_id:
-            continue
-        if _LIVE_VIDEO_RE.search(raw_title):
-            continue
-        m = _VIDEO_TITLE_RE.search(raw_title)
-        if not m:
-            continue
-        tracks.append({
-            "title": m.group(1).strip(),
-            "videoId": video_id,
-            "albumId": None,
-            "albumName": None,
-            "_year": None,
-            "_type": "",
-        })
-
-    _ARTIST_VIDEO_CACHE[artist_id] = tracks
-    return tracks
-
-
-def _dedupe_tracks(tracks: list[dict]) -> list[dict]:
-    entries = []
-    for t in tracks:
-        if is_instrumental(t["title"]):
-            continue
-        entries.append({**t, "title": clean_title(t["title"])})
-
-    groups: dict[str, list[dict]] = {}
-    for e in entries:
-        groups.setdefault(normalize_title(e["title"]), []).append(e)
-
-    songs = []
-    for group in groups.values():
-        # collapse exact same-videoId dupes before picking a winner
-        unique = list({e["videoId"]: e for e in group}.values())
-        winner = _pick_winner(unique)
-        # Always display the version-stripped title, even when the only available
-        # release still has a marker (e.g. a tour-only live cut) -- this keeps
-        # titles clean instead of showing "Song (...JapanホールTour2016 ver.)".
-        songs.append({"title": strip_variant_for_display(winner["title"]), "videoId": winner["videoId"]})
-    return songs
-
-
-def fetch_songs(artist: str, scope: str = "all") -> list[dict]:
-    """scope="top50"/"top25" limits the pool to the artist's most popular tracks
-    (by view count, see fetch_ranked_tracks) instead of the full discography. The
-    result stays in rank order (most popular first) -- build_questions relies on
-    that to prefer the nominal top 25/50 and only reach further down as a fallback."""
-    target = find_target_artist(artist)
-    if not target:
         return []
-    _, artist_id = target
 
-    if scope in ("top25", "top50"):
-        tracks = fetch_ranked_tracks(artist_id)
-    else:
-        tracks = fetch_all_tracks(artist_id)
 
-    songs = _dedupe_tracks(tracks)
-    if len(songs) < 4:
-        # Catalog sources came up empty/near-empty (see fetch_video_tracks) -- fall
-        # back to the artist's official music videos before giving up entirely.
-        songs = _dedupe_tracks(fetch_video_tracks(artist_id))
-    return songs
+def _yt_search_albums(query: str, limit: int = 3) -> list[dict]:
+    try:
+        return yt.search(query, filter="albums", limit=limit)
+    except Exception:
+        return []
+
+
+def _yt_get_album_tracks(browse_id: str) -> list[dict]:
+    try:
+        return yt.get_album(browse_id).get("tracks") or []
+    except Exception:
+        return []
+
+
+def _search_ytmusic_video(search_title: str, query_suffix: str) -> tuple[str, str] | None:
+    """Search "search_title query_suffix" on YT Music and return the (videoId, album
+    name) of the first audio-only (ATV) candidate whose title matches. None if
+    nothing matches."""
+    for c in _yt_search_songs(f"{search_title} {query_suffix}"):
+        if c.get("videoType") != _YTMUSIC_AUDIO_ONLY_TYPE:
+            continue
+        song_title = deezer.clean_title(c.get("title") or "")
+        if deezer._has_unwanted_keyword(song_title):
+            continue
+        if deezer._search_titles_match(search_title, song_title):
+            return c.get("videoId"), (c.get("album") or {}).get("name")
+    return None
+
+
+def _search_ytmusic_video_by_album_browse(search_title: str, album_title: str | None, artist_name: str | None) -> str | None:
+    """Last resort for a song that never shows up in filter="songs" results at all:
+    find the one matching album via filter="albums" and scan its own track list."""
+    if not album_title:
+        return None
+    query = f"{artist_name} {album_title}" if artist_name else album_title
+    for album in _yt_search_albums(query):
+        browse_id = album.get("browseId")
+        if not browse_id:
+            continue
+        for c in _yt_get_album_tracks(browse_id):
+            if c.get("videoType") != _YTMUSIC_AUDIO_ONLY_TYPE:
+                continue
+            song_title = deezer.clean_title(c.get("title") or "")
+            if deezer._has_unwanted_keyword(song_title):
+                continue
+            if deezer._search_titles_match(search_title, song_title):
+                return c.get("videoId")
+    return None
+
+
+def _query_suffixes_for(album_title: str | None, artist_name: str | None) -> list[tuple[str, str]]:
+    bare_artist_name = re.sub(r"[\(\[（【].*?[\)\]）】]", "", artist_name or "").strip()
+    artist_suffix = bare_artist_name or artist_name
+    suffixes = []
+    if album_title:
+        if "/" in album_title:
+            for part in album_title.split("/"):
+                part = part.strip()
+                if part:
+                    suffixes.append(("album", part))
+        suffixes.append(("album", album_title))
+    if artist_suffix:
+        suffixes.append(("artist", artist_suffix))
+    return suffixes
+
+
+def _fallback_search_titles(title: str) -> list[str]:
+    titles = [title]
+    base = deezer._NEW_VER_RE.sub("", deezer.strip_trailing_version_suffix(title)).strip()
+    if base and base != title:
+        titles.append(base)
+    return titles
+
+
+def _find_ytmusic_video_for_track(track: dict) -> str | None:
+    """Find the YT Music videoId matching a Deezer-ranked track, by title + the
+    single/album/EP it was released on (most reliable -- that's the same release
+    Deezer's ranking refers to), then title + performing artist name, then (if the
+    track has no native-script title) the romanized/English title, then finally by
+    browsing the one matching album's own track list directly."""
+    title = track.get("title")
+    if not title:
+        return None
+    album_title = track.get("album")
+    artist_name = track.get("artist")
+    plain_album_title = track.get("plain_album_title")
+    plain_artist_name = track.get("plain_artist")
+
+    default_suffixes = _query_suffixes_for(album_title, artist_name)
+    plain_suffixes = _query_suffixes_for(plain_album_title, plain_artist_name) or default_suffixes
+    for i, search_title in enumerate(_fallback_search_titles(title)):
+        query_suffixes = default_suffixes if i == 0 else plain_suffixes
+        for _, query_suffix in query_suffixes:
+            result = _search_ytmusic_video(search_title, query_suffix)
+            if result:
+                return result[0]
+
+    english_title = track.get("english_title")
+    if english_title:
+        for _, query_suffix in default_suffixes:
+            result = _search_ytmusic_video(english_title, query_suffix)
+            if result:
+                return result[0]
+
+    for candidate_album in (album_title, plain_album_title):
+        matched = _search_ytmusic_video_by_album_browse(title, candidate_album, artist_name)
+        if matched:
+            return matched
+    return None
+
+
+def fetch_songs(artist: str, scope: str = "all") -> tuple[str, list[dict]] | None:
+    """Resolve an artist via Deezer and return (canonical_name, tracks), tracks
+    staying in Deezer-rank order (most popular first). scope="top25"/"top50" is
+    applied by the caller (build_questions), which also backfills past the nominal
+    cutoff if too many of the top tier don't have a usable YT Music match."""
+    result = deezer.get_ranked_tracks(artist)
+    if not result or len(result["tracks"]) < 4:
+        return None
+    return result["artistName"], result["tracks"]
 
 
 def _estimated_wrapped_rows(line: str, chars_per_row: int = 22) -> int:
@@ -612,17 +250,22 @@ def build_questions(
 ) -> list[dict]:
     """count=None means "as many as we can find". difficulty="hard" shows a single
     lyric line instead of 2-4, making the source song harder to guess. scope="top50"/
-    "top25" limits the song pool to the artist's most popular tracks."""
+    "top25" limits the song pool to the artist's most popular tracks (by Deezer's
+    per-track rank)."""
     min_lines, max_lines = (1, 1) if difficulty == "hard" else (2, 4)
 
-    songs = fetch_songs(artist, scope)
-    if len(songs) < 4:
+    resolved = fetch_songs(artist, scope)
+    if not resolved:
         return []
+    _, songs = resolved
 
     all_titles = [s["title"] for s in songs]
 
     def build_one(song):
-        lyrics = fetch_lyrics(song["videoId"])
+        video_id = _find_ytmusic_video_for_track(song)
+        if not video_id:
+            return None
+        lyrics = fetch_lyrics(video_id)
         if not lyrics:
             return None
         snippet = extract_snippet(lyrics, song["title"], min_lines=min_lines, max_lines=max_lines)
@@ -630,14 +273,11 @@ def build_questions(
             return None
         return song, snippet
 
-    # Lyrics fetching is the slow part (2 network calls per song), and doing it
-    # one song at a time was slow enough that a large catalog (scope="all" can
-    # mean 100+ candidate songs) hit the request timeout before finishing.
-    # Fetch concurrently instead -- these are independent lookups. (A/B tested
-    # workers=1 vs 4 against the identical song subset: same success count
-    # either way, just slower -- so concurrency only costs latency here, not
-    # reliability. Most "failures" are songs that genuinely have no lyrics
-    # registered on YT Music, disproportionately older/deep-catalog tracks.)
+    # Matching each song on YT Music + fetching its lyrics is the slow part (up to
+    # a few network calls per song), and doing it one song at a time was slow
+    # enough that a large catalog (scope="all" can mean 100+ candidate songs) hit
+    # the request timeout before finishing. Fetch concurrently instead -- these
+    # are independent lookups.
     nominal = _SCOPE_NOMINAL_SIZE.get(scope)
     if nominal:
         # "全問" (count=None) within a ranked scope means "the full top N" --
@@ -645,10 +285,10 @@ def build_questions(
         # the top 25 alone happens to yield.
         if count is None:
             count = nominal
-        # fetch_songs returns these in popularity-rank order. Try the nominal
-        # top N first (that's what "top 25/50" should mean); only reach past
-        # rank N if too few of them have lyrics available to satisfy the
-        # requested question count, rather than just falling short of it.
+        # songs stays in Deezer-rank order. Try the nominal top N first (that's
+        # what "top 25/50" should mean); only reach past rank N if too few of
+        # them have a usable YT Music match to satisfy the requested question
+        # count, rather than just falling short of it.
         primary, backfill = songs[:nominal], songs[nominal:]
     else:
         primary, backfill = songs, []
@@ -700,15 +340,6 @@ def resolve_suggestion_name(raw: str) -> str | None:
     (e.g. "YOASOBI 夜に駆ける") -- resolve it to just the artist's actual full name so
     that's what's shown in the dropdown. Returns None (dropped by the caller) rather
     than the raw, possibly song-name-containing text when it can't be resolved.
-
-    Deliberately lighter-weight than find_target_artist (used for the actual quiz
-    build): a single ja-locale "artists" search, instead of also cross-checking a
-    song-search majority vote. That cross-check matters for a bare, ambiguous
-    single word typed by the user (e.g. "SEKAI"), but raw suggestions from YT
-    Music's own autocomplete are already specific phrases (e.g. "sekai no owari
-    rpg"), so a direct artist search resolves them reliably without needing it --
-    and skipping it keeps suggestions responsive while typing, since this runs
-    once per candidate (up to 6) on every keystroke.
     """
     if raw in _SUGGESTION_NAME_CACHE:
         return _SUGGESTION_NAME_CACHE[raw]
@@ -749,8 +380,8 @@ def suggest():
     # get_search_suggestions mixes bare artist names in with "artist songname"
     # completions. Some real artist names are themselves multi-word (e.g. "SEKAI
     # NO OWARI"), so a space can't be used to tell those apart -- instead resolve
-    # every candidate through find_target_artist below, which collapses both
-    # cases down to the actual artist name via majority vote.
+    # every candidate through resolve_suggestion_name below, which collapses both
+    # cases down to the actual artist name.
     seen = set()
     candidates = []
     for text in raw:
