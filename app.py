@@ -436,6 +436,26 @@ def suggest():
     return jsonify(names)
 
 
+@app.route("/api/debug/list")
+def debug_list():
+    # TEMPORARY diagnostic route -- lists every track Deezer/iTunes discovery
+    # returned for an artist, to check for duplicates/junk. Not linked from the UI.
+    artist = (request.args.get("artist") or "").strip()
+    if not artist:
+        return jsonify({"error": "artist is required"}), 400
+    result = deezer.get_ranked_tracks(artist)
+    if not result:
+        return jsonify({"error": "artist_not_found"}), 404
+    return jsonify({
+        "artistName": result["artistName"],
+        "count": len(result["tracks"]),
+        "tracks": [
+            {"rank": t["rank"], "title": t["title"], "artist": t["artist"], "album": t["album"]}
+            for t in result["tracks"]
+        ],
+    })
+
+
 # Building a quiz can take anywhere from a few seconds to well over a minute
 # (matching each candidate song against YT Music + fetching its lyrics), so
 # /api/quiz/build kicks the work off in a background thread and returns
