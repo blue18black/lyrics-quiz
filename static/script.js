@@ -284,13 +284,17 @@ function showQuestion() {
   selectedChoiceIndex = -1;
 
   snippetEl.textContent = q.snippet;
-  fitSnippetText();
   q.choices.forEach((choice) => {
     const btn = document.createElement("button");
     btn.textContent = choice;
     btn.addEventListener("click", () => submitAnswer(q, choice, btn));
     choicesEl.appendChild(btn);
   });
+  // Must run after choices are populated -- the snippet's available height
+  // depends on how much room the (currently empty) choices list will end up
+  // taking, so fitting against an empty list would size the text for more
+  // space than actually exists once the buttons are added.
+  fitSnippetText();
 
   updateProgress();
 }
