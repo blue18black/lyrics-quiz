@@ -43,11 +43,20 @@ yt_ja = YTMusic(language="ja")
 _YTMUSIC_AUDIO_ONLY_TYPE = "MUSIC_VIDEO_TYPE_ATV"
 
 
-def _yt_search_songs(query: str, limit: int = 8) -> list[dict]:
-    try:
-        return yt.search(query, filter="songs", limit=limit)
-    except Exception:
-        return []
+def _yt_search_songs(query: str, limit: int = 12) -> list[dict]:
+    # YT Music's search results are noisy from call to call (a query that turns
+    # up nothing can succeed on a second try) -- observed repeatedly enough
+    # this session to be worth a single retry here too, same as fetch_lyrics.
+    for attempt in range(2):
+        try:
+            results = yt.search(query, filter="songs", limit=limit)
+            if results:
+                return results
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(0.4)
+    return []
 
 
 def _yt_search_albums(query: str, limit: int = 3) -> list[dict]:
