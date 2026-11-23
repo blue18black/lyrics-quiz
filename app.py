@@ -718,11 +718,40 @@ def debug_lyrics():
     except Exception as exc:
         egress = describe_error(exc)
 
+    def raw(endpoint, body):
+        # Same request ytmusicapi sends, but report the raw HTTP response instead
+        # of letting json.loads() blow up on a non-JSON body.
+        from ytmusicapi.constants import YTM_BASE_API
+
+        body = {**body, **yt.context}
+        try:
+            resp = yt._session.post(
+                YTM_BASE_API + endpoint + yt.params,
+                json=body,
+                headers=yt.headers,
+                proxies=yt.proxies,
+                cookies=yt.cookies,
+                timeout=15,
+            )
+        except Exception as exc:
+            return describe_error(exc)
+        return {
+            "status": resp.status_code,
+            "reason": resp.reason,
+            "content_type": resp.headers.get("content-type"),
+            "length": len(resp.content),
+            "final_url": resp.url[:200],
+            "head": resp.text[:300],
+        }
+
     return jsonify({
         "video_id": video_id,
         "egress": egress,
         "yt_default": probe(yt),
         "yt_ja": probe(yt_ja),
+        "raw_next": raw("next", {"videoId": video_id, "isAudioOnly": True}),
+        "raw_search": raw("search", {"query": "つばきファクトリー"}),
+        "raw_browse_lyrics": raw("browse", {"browseId": "MPLYt_riCfqzgOyvE-1"}),
     })
 
 
