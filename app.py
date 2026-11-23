@@ -749,7 +749,22 @@ def debug_match():
         video_id, yt_title, album_id = match
         lyrics = fetch_lyrics(video_id, album_id, yt_title)
         if not lyrics:
-            return {"title": song["title"], "artist": song.get("artist"), "status": "NO_LYRICS", "video_id": video_id}
+            tracks = _cached_album_tracks(album_id) if album_id else None
+            lyrics_id = _derive_lyrics_browse_id(video_id, album_id, yt_title)
+            try:
+                lyrics_probe = (
+                    "has_lyrics" if (yt.get_lyrics(lyrics_id) or {}).get("lyrics") else "none"
+                ) if lyrics_id else None
+            except Exception as exc:
+                lyrics_probe = f"{type(exc).__name__}: {str(exc)[:150]}"
+            return {
+                "title": song["title"], "artist": song.get("artist"), "status": "NO_LYRICS",
+                "video_id": video_id, "yt_title": yt_title, "album_id": album_id,
+                "album_tracks": None if tracks is None else [
+                    [t.get("videoId"), t.get("trackNumber"), t.get("title")] for t in tracks[:30]
+                ],
+                "derived_lyrics_id": lyrics_id, "lyrics_probe": lyrics_probe,
+            }
         return {"title": song["title"], "artist": song.get("artist"), "status": "OK", "video_id": video_id}
 
     with ThreadPoolExecutor(max_workers=8) as pool:
