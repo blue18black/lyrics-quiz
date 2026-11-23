@@ -677,5 +677,54 @@ def debug_match():
     return jsonify({"counts": counts, "results": results})
 
 
+@app.route("/api/debug/lyrics")
+def debug_lyrics():
+    # Temporary: fetch_lyrics() folds "no lyrics tab" and "request raised" into
+    # the same None, so this calls YT Music uncached and reports which one it was
+    # (plus the server's apparent egress country) to tell a region gap apart
+    # from the server's IP being blocked.
+    import requests
+
+    video_id = (request.args.get("video_id") or "otjWKuKCQGc").strip()
+
+    def describe_error(exc):
+        return {"error_type": type(exc).__name__, "error": str(exc)[:500]}
+
+    def probe(client):
+        out = {}
+        try:
+            wp = client.get_watch_playlist(video_id)
+        except Exception as exc:
+            out["watch_playlist"] = describe_error(exc)
+            return out
+        lyrics_id = wp.get("lyrics")
+        out["watch_playlist"] = {
+            "ok": True,
+            "tracks": len(wp.get("tracks") or []),
+            "lyrics_browse_id": lyrics_id,
+            "related_browse_id": wp.get("related"),
+        }
+        if lyrics_id:
+            try:
+                lyrics = (client.get_lyrics(lyrics_id) or {}).get("lyrics")
+                out["get_lyrics"] = {"ok": True, "length": len(lyrics or ""), "head": (lyrics or "")[:40]}
+            except Exception as exc:
+                out["get_lyrics"] = describe_error(exc)
+        return out
+
+    try:
+        geo = requests.get("https://ipinfo.io/json", timeout=5).json()
+        egress = {k: geo.get(k) for k in ("country", "region", "city", "org")}
+    except Exception as exc:
+        egress = describe_error(exc)
+
+    return jsonify({
+        "video_id": video_id,
+        "egress": egress,
+        "yt_default": probe(yt),
+        "yt_ja": probe(yt_ja),
+    })
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050, threaded=True)
