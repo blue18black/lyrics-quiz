@@ -1,4 +1,5 @@
 import base64
+import json
 import random
 import re
 import threading
@@ -154,11 +155,11 @@ def _search_ytmusic_video(
     artist_name: str | None,
     plain_artist_name: str | None = None,
     expected_duration: int | None = None,
-) -> tuple[str, str, str] | None:
+) -> tuple[str, str, str | None, str | None] | None:
     """Search "search_title query_suffix" on YT Music and return (videoId, its own
-    cleaned title, album name) of the first audio-only (ATV) candidate whose title
-    matches AND (performing artist matches OR duration closely matches). None if
-    nothing matches."""
+    cleaned title, album name, album browseId) of the first audio-only (ATV)
+    candidate whose title matches AND (performing artist matches OR duration
+    closely matches). None if nothing matches."""
     for c in _yt_search_songs(f"{search_title} {query_suffix}"):
         if c.get("videoType") != _YTMUSIC_AUDIO_ONLY_TYPE:
             continue
@@ -173,7 +174,8 @@ def _search_ytmusic_video(
             or _duration_closely_matches(c, expected_duration)
         ):
             continue
-        return video_id, song_title, (c.get("album") or {}).get("name")
+        album = c.get("album") or {}
+        return video_id, song_title, album.get("name"), album.get("id")
     return None
 
 
@@ -183,9 +185,10 @@ def _search_ytmusic_video_by_album_browse(
     artist_name: str | None,
     plain_artist_name: str | None = None,
     expected_duration: int | None = None,
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     """Last resort for a song that never shows up in filter="songs" results at all:
-    find the one matching album via filter="albums" and scan its own track list."""
+    find the one matching album via filter="albums" and scan its own track list.
+    Returns (videoId, title, album browseId)."""
     if not album_title:
         return None
     query = f"{artist_name} {album_title}" if artist_name else album_title
@@ -207,7 +210,7 @@ def _search_ytmusic_video_by_album_browse(
                 or _duration_closely_matches(c, expected_duration)
             ):
                 continue
-            return video_id, song_title
+            return video_id, song_title, browse_id
     return None
 
 
@@ -235,8 +238,9 @@ def _fallback_search_titles(title: str) -> list[str]:
     return titles
 
 
-def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str] | None:
-    """Find the (videoId, title) matching a Deezer-ranked track on YT Music, by
+def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str, str | None] | None:
+    """Find the (videoId, title, album browseId) matching a Deezer-ranked track on
+    YT Music, by
     title + the single/album/EP it was released on (most reliable -- that's the
     same release Deezer's ranking refers to), then title + performing artist name,
     then (if the track has no native-script title) the romanized/English title,
@@ -263,7 +267,7 @@ def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str] | None:
                 search_title, query_suffix, active_artist_name, plain_artist_name, expected_duration
             )
             if result:
-                return result[0], result[1]
+                return result[0], result[1], result[3]
 
     english_title = track.get("english_title")
     if english_title:
@@ -272,7 +276,7 @@ def _find_ytmusic_video_for_track(track: dict) -> tuple[str, str] | None:
                 english_title, query_suffix, artist_name, plain_artist_name, expected_duration
             )
             if result:
-                return result[0], result[1]
+                return result[0], result[1], result[3]
 
     for candidate_album in (album_title, plain_album_title):
         matched = _search_ytmusic_video_by_album_browse(
@@ -338,7 +342,84 @@ def extract_snippet(
 _LYRICS_CACHE: dict[str, str | None] = {}
 
 
-def fetch_lyrics(video_id: str) -> str | None:
+# YT Music's "next" endpoint (get_watch_playlist -- the normal way to look up a
+# song's lyrics browseId) answers datacenter IPs such as Render's with a 403 HTML
+# "Sorry..." bot-check page, while "search" and "browse" keep working from the
+# same IP. Once that's seen, "next" is skipped for a while and the lyrics
+# browseId is derived from the song's album instead (see
+# _derive_lyrics_browse_id), so every song doesn't pay for a doomed request.
+_NEXT_BLOCK_SECONDS = 30 * 60
+_next_blocked_until = 0.0
+
+_ALBUM_TRACKS_CACHE: dict[str, list[dict]] = {}
+
+
+def _cached_album_tracks(album_id: str) -> list[dict] | None:
+    """Album track list, cached since many songs of one artist share an album.
+    None on a request error (not cached)."""
+    if album_id in _ALBUM_TRACKS_CACHE:
+        return _ALBUM_TRACKS_CACHE[album_id]
+    try:
+        tracks = yt.get_album(album_id).get("tracks") or []
+    except Exception:
+        return None
+    _ALBUM_TRACKS_CACHE[album_id] = tracks
+    return tracks
+
+
+def _derive_lyrics_browse_id(video_id: str, album_id: str | None, title: str | None) -> str | None:
+    """A song's lyrics browseId is "MPLYt_" + its album's browseId minus the
+    "MPREb_" prefix + "-" + its track number on that album (e.g. album
+    MPREb_mCzq1j5XPrU track 2 -> MPLYt_mCzq1j5XPrU-2), verified against "next"'s
+    own answer locally. The album page lists the same songs under different
+    videoIds than search results do, so the track is found by videoId first and
+    then by title."""
+    if not album_id or not album_id.startswith("MPREb_"):
+        return None
+    tracks = _cached_album_tracks(album_id)
+    if not tracks:
+        return None
+
+    def track_number(index, track):
+        return track.get("trackNumber") or index + 1
+
+    for i, t in enumerate(tracks):
+        if t.get("videoId") == video_id:
+            return f"MPLYt_{album_id[len('MPREb_'):]}-{track_number(i, t)}"
+    if title:
+        wanted = _normalize_name_for_match(title)
+        for i, t in enumerate(tracks):
+            if _normalize_name_for_match(deezer.clean_title(t.get("title") or "")) == wanted:
+                return f"MPLYt_{album_id[len('MPREb_'):]}-{track_number(i, t)}"
+        for i, t in enumerate(tracks):
+            if deezer._search_titles_match(title, deezer.clean_title(t.get("title") or "")):
+                return f"MPLYt_{album_id[len('MPREb_'):]}-{track_number(i, t)}"
+    return None
+
+
+def _lyrics_browse_id_via_next(video_id: str) -> tuple[bool, str | None]:
+    """(answered, lyrics browseId) from the "next" endpoint. answered=False when
+    it couldn't be asked (blocked or erroring), so the caller should fall back."""
+    global _next_blocked_until
+    if time.time() < _next_blocked_until:
+        return False, None
+    # A burst of concurrent requests to YT Music's (unofficial) API appears to
+    # get some fraction of them transiently rejected -- retrying once after a
+    # short pause recovers a lot of those.
+    for attempt in range(2):
+        try:
+            return True, yt.get_watch_playlist(video_id).get("lyrics")
+        except json.JSONDecodeError:
+            # Non-JSON body = the HTML bot-check page; retrying won't help.
+            _next_blocked_until = time.time() + _NEXT_BLOCK_SECONDS
+            return False, None
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.6)
+    return False, None
+
+
+def fetch_lyrics(video_id: str, album_id: str | None = None, title: str | None = None) -> str | None:
     # "Play again" reshuffles from the same (cached) song pool, so replaying
     # tends to re-hit songs whose lyrics were already fetched last time --
     # cache both hits and confirmed misses so a replay doesn't redo this
@@ -350,17 +431,20 @@ def fetch_lyrics(video_id: str) -> str | None:
     if video_id in _LYRICS_CACHE:
         return _LYRICS_CACHE[video_id]
 
-    # A burst of concurrent requests to YT Music's (unofficial) API appears to
-    # get some fraction of them transiently rejected -- retrying once after a
-    # short pause recovers a lot of those.
+    answered, lyrics_browse_id = _lyrics_browse_id_via_next(video_id)
+    if not answered:
+        lyrics_browse_id = _derive_lyrics_browse_id(video_id, album_id, title)
+        if not lyrics_browse_id:
+            return None
+    elif not lyrics_browse_id:
+        _LYRICS_CACHE[video_id] = None
+        return None
+
     for attempt in range(2):
         try:
-            watch_playlist = yt.get_watch_playlist(video_id)
-            lyrics_browse_id = watch_playlist.get("lyrics")
-            if not lyrics_browse_id:
-                _LYRICS_CACHE[video_id] = None
-                return None
-            lyrics = yt.get_lyrics(lyrics_browse_id)["lyrics"]
+            # None (rather than an exception) when that browseId has no lyrics,
+            # which also covers a derived id for a song without any.
+            lyrics = (yt.get_lyrics(lyrics_browse_id) or {}).get("lyrics")
             _LYRICS_CACHE[video_id] = lyrics
             return lyrics
         except Exception:
@@ -411,8 +495,8 @@ def build_questions(
         match = _find_ytmusic_video_for_track(song)
         result = None
         if match:
-            video_id, yt_title = match
-            lyrics = fetch_lyrics(video_id)
+            video_id, yt_title, album_id = match
+            lyrics = fetch_lyrics(video_id, album_id, yt_title)
             if lyrics:
                 resolved_titles[id(song)] = yt_title
                 snippet = extract_snippet(lyrics, yt_title, min_lines=min_lines, max_lines=max_lines)
@@ -662,8 +746,8 @@ def debug_match():
         match = _find_ytmusic_video_for_track(song)
         if not match:
             return {"title": song["title"], "artist": song.get("artist"), "status": "NO_MATCH"}
-        video_id, yt_title = match
-        lyrics = fetch_lyrics(video_id)
+        video_id, yt_title, album_id = match
+        lyrics = fetch_lyrics(video_id, album_id, yt_title)
         if not lyrics:
             return {"title": song["title"], "artist": song.get("artist"), "status": "NO_LYRICS", "video_id": video_id}
         return {"title": song["title"], "artist": song.get("artist"), "status": "OK", "video_id": video_id}
