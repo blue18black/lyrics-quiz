@@ -843,8 +843,26 @@ def debug_lyrics():
             "head": resp.text[:300],
         }
 
+    # Does the request's declared country (gl) / language (hl) change whether a
+    # region-restricted lyrics page is served?
+    lyrics_id = (request.args.get("lyrics_id") or "MPLYt_mCzq1j5XPrU-1").strip()
+    by_locale = {}
+    for label, kwargs in (
+        ("default", {}),
+        ("hl_ja", {"language": "ja"}),
+        ("gl_JP", {"location": "JP"}),
+        ("hl_ja_gl_JP", {"language": "ja", "location": "JP"}),
+    ):
+        try:
+            got = (YTMusic(**kwargs).get_lyrics(lyrics_id) or {}).get("lyrics")
+            by_locale[label] = (got or "")[:30] or None
+        except Exception as exc:
+            by_locale[label] = describe_error(exc)
+
     return jsonify({
         "video_id": video_id,
+        "lyrics_id": lyrics_id,
+        "lyrics_by_locale": by_locale,
         "egress": egress,
         "yt_default": probe(yt),
         "yt_ja": probe(yt_ja),
